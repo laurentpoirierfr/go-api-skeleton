@@ -1,0 +1,376 @@
+components:
+  schemas:
+    CancelOrderBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CancelOrderBody.json
+          format: uri
+          readOnly: true
+          type: string
+        reason:
+          description: Why the order is cancelled
+          examples:
+            - Ordered by mistake
+          maxLength: 500
+          type: string
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      properties:
+        location:
+          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
+          type: string
+        message:
+          description: Error message text
+          type: string
+        value:
+          description: The value at the given location
+      type: object
+    ErrorModel:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ErrorModel.json
+          format: uri
+          readOnly: true
+          type: string
+        detail:
+          description: A human-readable explanation specific to this occurrence of the problem.
+          examples:
+            - Property foo is required but is missing.
+          type: string
+        errors:
+          description: Optional list of individual error details
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          type:
+            - array
+            - "null"
+        instance:
+          description: A URI reference that identifies the specific occurrence of the problem.
+          examples:
+            - https://example.com/error-log/abc123
+          format: uri
+          type: string
+        status:
+          description: HTTP status code
+          examples:
+            - 400
+          format: int64
+          type: integer
+        title:
+          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+          examples:
+            - Bad Request
+          type: string
+        type:
+          default: about:blank
+          description: A URI reference to human-readable documentation for the error.
+          examples:
+            - https://example.com/errors/example
+          format: uri
+          type: string
+      type: object
+    LineBody:
+      additionalProperties: false
+      properties:
+        product:
+          type: string
+        quantity:
+          format: int64
+          type: integer
+        total_cents:
+          format: int64
+          type: integer
+        unit_price_cents:
+          format: int64
+          type: integer
+      required:
+        - product
+        - quantity
+        - unit_price_cents
+        - total_cents
+      type: object
+    LineInput:
+      additionalProperties: false
+      properties:
+        product:
+          description: Product name
+          examples:
+            - Gopher plush
+          maxLength: 100
+          minLength: 1
+          type: string
+        quantity:
+          examples:
+            - 2
+          format: int64
+          maximum: 1000
+          minimum: 1
+          type: integer
+        unit_price_cents:
+          description: Unit price, in cents
+          examples:
+            - 1250
+          format: int64
+          maximum: 100000000
+          minimum: 1
+          type: integer
+      required:
+        - product
+        - quantity
+        - unit_price_cents
+      type: object
+    OrderBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/OrderBody.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        customer:
+          format: email
+          type: string
+        id:
+          format: uuid
+          type: string
+        lines:
+          items:
+            $ref: "#/components/schemas/LineBody"
+          type:
+            - array
+            - "null"
+        status:
+          enum:
+            - placed
+            - cancelled
+          type: string
+        total_cents:
+          format: int64
+          type: integer
+        updated_at:
+          format: date-time
+          type: string
+        version:
+          description: Incremented on every change
+          format: int64
+          type: integer
+      required:
+        - id
+        - customer
+        - status
+        - total_cents
+        - lines
+        - version
+        - created_at
+        - updated_at
+      type: object
+    OrderPageOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/OrderPageOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/OrderBody"
+          type:
+            - array
+            - "null"
+        next_cursor:
+          description: Cursor of the next page; absent on the last page
+          type: string
+      required:
+        - items
+      type: object
+    PlaceOrderInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/PlaceOrderInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        customer:
+          description: Customer email address
+          examples:
+            - ada@example.com
+          format: email
+          maxLength: 254
+          type: string
+        lines:
+          items:
+            $ref: "#/components/schemas/LineInput"
+          maxItems: 50
+          minItems: 1
+          type:
+            - array
+            - "null"
+      required:
+        - customer
+        - lines
+      type: object
+info:
+  description: Place, read, list and cancel orders. Every change publishes an event (order.created.v1, order.cancelled.v1).
+  title: Orders API
+  version: 1.0.0
+openapi: 3.1.0
+paths:
+  /v1/orders:
+    get:
+      description: Most recent first, paginated with an opaque cursor.
+      operationId: list-orders
+      parameters:
+        - description: Only orders with this status
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: Only orders with this status
+            enum:
+              - placed
+              - cancelled
+            type: string
+        - description: Opaque cursor returned as next_cursor by the previous page
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Opaque cursor returned as next_cursor by the previous page
+            type: string
+        - description: Page size
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            description: Page size
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderPageOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List orders
+      tags:
+        - orders
+    post:
+      description: Creates the order and publishes order.created.v1.
+      operationId: place-order
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceOrderInputBody"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderBody"
+          description: Created
+          headers:
+            Location:
+              schema:
+                description: URL of the new order
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Place an order
+      tags:
+        - orders
+  /v1/orders/{id}:
+    get:
+      operationId: get-order
+      parameters:
+        - description: Order ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Order ID
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get an order
+      tags:
+        - orders
+  /v1/orders/{id}/cancellation:
+    post:
+      description: Cancels the order and publishes order.cancelled.v1. Cancelling twice returns 409.
+      operationId: cancel-order
+      parameters:
+        - description: Order ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Order ID
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelOrderBody"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Cancel an order
+      tags:
+        - orders

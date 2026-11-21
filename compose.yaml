@@ -1,0 +1,110 @@
+# Environnement de développement : les dépendances de l'API et du worker.
+#   make up                  PostgreSQL, NATS et Jaeger (attend qu'ils soient prêts)
+#   make up BROKER=redpanda  PostgreSQL, Redpanda et Jaeger
+#   make down                arrête et supprime les données
+name: go-api-skeleton
+
+services:
+  postgres:
+    image: docker.io/postgres:17-alpine
+    environment:
+      POSTGRES_USER: skeleton
+      POSTGRES_PASSWORD: skeleton
+      POSTGRES_DB: orders
+    ports: ["5432:5432"]
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skeleton -d orders"]
+      interval: 2s
+      retries: 30
+
+  nats:
+    profiles: [nats]
+    image: docker.io/nats:2.12-alpine
+    # -js active JetStream ; -sd son stockage ; -m le port de supervision.
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports: ["4222:4222", "8222:8222"]
+    volumes: [nats:/data]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8222/healthz?js-enabled-only=true"]
+      interval: 2s
+      retries: 30
+
+  # Redpanda : compatible Kafka, sans ZooKeeper ni JVM. Le port 19092 sert les
+  # clients de la machine hôte (go run), 9092 ceux du réseau compose ; la
+  # console web est sur http://localhost:8082.
+  redpanda:
+    profiles: [redpanda]
+    image: docker.io/redpandadata/redpanda:v25.2.4
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports: ["19092:19092", "9644:9644"]
+    volumes: [redpanda:/var/lib/redpanda/data]
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 2s
+      retries: 30
+
+  redpanda-console:
+    profiles: [redpanda]
+    image: docker.io/redpandadata/console:v3.2.2
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports: ["8082:8080"]
+    depends_on:
+      redpanda: { condition: service_healthy }
+
+  # Le collecteur OpenTelemetry : les applications lui envoient leurs traces
+  # (OTLP, 4317 en gRPC, 4318 en HTTP), il les relaie vers Jaeger. Sa
+  # configuration : deploy/otel-collector.yaml.
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:0.140.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro,z"]
+    ports: ["4317:4317", "4318:4318", "13133:13133"]
+    depends_on: [jaeger]
+
+  # Jaeger reçoit les traces du collecteur ; son interface est sur
+  # http://localhost:16686.
+  jaeger:
+    image: docker.io/jaegertracing/jaeger:2.22.0
+    ports: ["16686:16686"]
+
+  # Les applications elles-mêmes, construites depuis le Dockerfile. Elles ne
+  # démarrent qu'avec le profil « apps » : make up ne lance que les
+  # dépendances, pour développer avec go run ; make up-apps lance tout, comme
+  # en production.
+  api:
+    profiles: [apps]
+    build: { context: ., args: { APP: api, PORT: "8080" } }
+    environment: &app-env
+      POSTGRES_URL: postgres://skeleton:skeleton@postgres:5432/orders?sslmode=disable
+      MESSAGING_BROKER: ${BROKER:-nats}
+      MESSAGING_NATS_URL: nats://nats:4222
+      MESSAGING_REDPANDA_BROKERS: redpanda:9092
+      TELEMETRY_ENABLED: "true"
+      TELEMETRY_ENDPOINT: http://otel-collector:4318
+    ports: ["8080:8080"]
+    depends_on: &app-deps
+      postgres: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+      # Seul le broker choisi est démarré (profil nats ou redpanda).
+      nats: { condition: service_healthy, required: false }
+      redpanda: { condition: service_healthy, required: false }
+
+  worker:
+    profiles: [apps]
+    build: { context: ., args: { APP: worker, PORT: "8081" } }
+    environment: *app-env
+    ports: ["8081:8081"]
+    depends_on: *app-deps
+
+volumes:
+  postgres:
+  nats:
+  redpanda:

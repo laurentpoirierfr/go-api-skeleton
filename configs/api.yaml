@@ -1,0 +1,19 @@
+# Configuration du binaire api pour le développement local (make up).
+#
+# Ce fichier ne contient que ce qui diffère des valeurs par défaut : toutes les
+# clés, leur rôle et leur variable d'environnement sont dans reference.yaml.
+# Pour voir la configuration effective et d'où vient chaque valeur :
+#   go run ./cmd/api -print-config
+
+postgres:
+  # Les identifiants de compose.yaml. En production : POSTGRES_URL, jamais ce
+  # fichier.
+  url: postgres://skeleton:skeleton@localhost:5432/orders?sslmode=disable
+  # En production, les migrations sont lancées à part (false par défaut).
+  auto_migrate: true
+
+telemetry:
+  enabled: true # vers le collecteur de compose.yaml (http://localhost:4318)
+
+log:
+  format: text # lisible dans un terminal ; json par défaut, pour les collecteurs
