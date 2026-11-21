@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,10 +85,12 @@ func AccessLog(log *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(rec, r)
 			level := slog.LevelInfo
 			switch {
+			case strings.HasPrefix(r.URL.Path, "/health/"):
+				// Une sonde en échec (503) n'est pas une erreur du service : son
+				// état est déjà dans la réponse, et elle est interrogée en boucle.
+				level = slog.LevelDebug
 			case rec.status >= 500:
 				level = slog.LevelError
-			case len(r.URL.Path) >= 8 && r.URL.Path[:8] == "/health/":
-				level = slog.LevelDebug
 			}
 			log.Log(r.Context(), level, "request",
 				"request_id", RequestIDFrom(r.Context()), "method", r.Method, "path", r.URL.Path,

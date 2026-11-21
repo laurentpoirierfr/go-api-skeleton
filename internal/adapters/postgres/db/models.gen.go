@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Notification struct {
@@ -40,4 +41,13 @@ type ProcessedMessage struct {
 	Consumer    string
 	MessageID   string
 	ProcessedAt time.Time
+}
+
+type WatermillOutbox struct {
+	Offset    int32
+	Uuid      string
+	Payload   []byte
+	Metadata  []byte
+	Acked     bool
+	CreatedAt pgtype.Timestamptz
 }

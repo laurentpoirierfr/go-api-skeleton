@@ -7,16 +7,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/ThreeDotsLabs/watermill"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/httpapi"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/messaging"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/postgres"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/app"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/domain/order"
@@ -36,6 +37,10 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// outboxPollInterval est le délai entre deux lectures de l'outbox : la latence
+// maximale entre l'enregistrement d'un événement et sa publication.
+const outboxPollInterval = 200 * time.Millisecond
 
 // run assemble et lance le binaire ; les tests l'appellent avec leurs propres
 // arguments.
@@ -60,11 +65,29 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	defer pool.Close()
 
-	uow := postgres.NewUnitOfWork(pool, func(pgx.Tx) app.Outbox { return logOutbox{log} })
+	// La messagerie : les événements sont écrits dans l'outbox, avec les
+	// données, puis le forwarder les publie dans NATS JetStream.
+	wmLogger := watermill.NewSlogLogger(log.With("component", "watermill"))
+	conn, err := messaging.Connect(cfg.NATS.URL, cfg.Service.Name)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	publisher, err := messaging.NewPublisher(conn, wmLogger)
+	if err != nil {
+		return err
+	}
+	forwarder, err := messaging.Forwarder(pool, publisher, wmLogger, outboxPollInterval)
+	if err != nil {
+		return err
+	}
+
+	uow := postgres.NewUnitOfWork(pool, func(tx pgx.Tx) app.Outbox { return messaging.NewOutbox(tx, wmLogger) })
 	orders := app.NewOrderService(uow, time.Now, order.NewID)
 
 	h := health.New(2 * time.Second)
 	h.Add("postgres", pool.Ping)
+	h.Add("nats", messaging.Check(conn))
 	mux := http.NewServeMux()
 	h.Register(mux)
 	httpapi.New(mux, orders, log)
@@ -77,7 +100,20 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	return runner.Run(ctx, log, runner.HTTPServer(srv, cfg.Shutdown.Timeout, h.ShuttingDown))
+	return runner.Run(ctx, log,
+		runner.HTTPServer(srv, cfg.Shutdown.Timeout, h.ShuttingDown),
+		// L'API accepte des commandes même si NATS est indisponible : les
+		// événements attendent dans l'outbox, et le forwarder attend le stream.
+		runner.Component{Name: forwarder.Name, Run: func(ctx context.Context) error {
+			_, err := messaging.WaitForStream(ctx, conn, 2*time.Second, func(err error) {
+				log.WarnContext(ctx, "waiting for the NATS stream", "err", err)
+			})
+			if err != nil {
+				return nil // annulé pendant l'attente : arrêt normal
+			}
+			return forwarder.Run(ctx)
+		}},
+	)
 }
 
 // loadConfig lit le fichier désigné par -config ou CONFIG_FILE (obligatoire
@@ -97,15 +133,4 @@ func loadConfig(args []string) (config.Config, error) {
 		opts.File = "configs/api.yaml"
 	}
 	return config.Load(opts)
-}
-
-// logOutbox journalise les événements au lieu de les publier. Provisoire : la
-// publication par Watermill (outbox SQL puis NATS JetStream) la remplace.
-type logOutbox struct{ log *slog.Logger }
-
-func (o logOutbox) Add(ctx context.Context, events ...order.Event) error {
-	for _, e := range events {
-		o.log.InfoContext(ctx, "event (not published yet)", "type", e.EventType(), "order_id", e.AggregateID().String())
-	}
-	return nil
 }

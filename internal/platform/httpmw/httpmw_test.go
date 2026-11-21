@@ -48,3 +48,14 @@ func TestAccessLogAndRecover(t *testing.T) {
 		t.Errorf("logs:\n%s", logs.String())
 	}
 }
+
+// Une sonde en échec reste au niveau debug : ce n'est pas une erreur.
+func TestAccessLogHealthProbe(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	h := AccessLog(log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/health/ready", nil))
+	if !strings.Contains(logs.String(), "level=DEBUG msg=request") {
+		t.Errorf("%s", logs.String())
+	}
+}
