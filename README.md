@@ -152,3 +152,8 @@ pkg/       le code réutilisable par d'autres modules (si besoin)
 
 Les branches suivent git flow : `develop` pour le travail courant, `main` pour
 les versions publiées (`git flow feature start …`, `git flow release start …`).
+
+## Licence
+
+[MIT](LICENSE) : réutilisation libre, y compris commerciale, en gardant la
+mention de copyright.
