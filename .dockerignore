@@ -1,0 +1,13 @@
+# Seuls les sources et la configuration entrent dans le contexte de
+# construction : plus rapide, et aucun fichier local ne fuit dans l'image.
+.git
+.github
+bin/
+coverage.*
+*.prof
+.env
+.idea/
+.vscode/
+.claude/
+Dockerfile
+compose.yaml

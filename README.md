@@ -11,6 +11,21 @@ make lint    # golangci-lint (dans un conteneur)
 make vuln    # vulnérabilités des dépendances
 ```
 
+## Images Docker
+
+Un seul `Dockerfile` construit les deux binaires (`--build-arg APP=api|worker`),
+en deux étapes : compilation dans `golang`, puis exécution dans
+`distroless/static:nonroot` (une dizaine de Mo, sans shell, non root).
+
+```bash
+make images                        # go-api-skeleton-api et -worker, version issue de git
+make images VERSION=1.2.0          # une version précise
+docker compose --profile apps up   # les dépendances et les deux applications
+```
+
+L'image embarque `configs/<app>.yaml` ; chaque clé reste surchargeable par
+l'environnement (`POSTGRES_URL`, `NATS_URL`…), et le journal y est en JSON.
+
 Organisation :
 
 ```text

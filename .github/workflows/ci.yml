@@ -53,3 +53,13 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
+
+  images:
+    name: Images Docker (api et worker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Construit les deux images sans les publier : le Dockerfile reste valide
+      # à chaque modification.
+      - name: Construction
+        run: make images VERSION=ci
