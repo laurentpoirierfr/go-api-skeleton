@@ -7,15 +7,22 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/httpapi"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/postgres"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/app"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/domain/order"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/config"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/health"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/httpmw"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/logger"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/runner"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/version"
@@ -53,14 +60,18 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	defer pool.Close()
 
+	uow := postgres.NewUnitOfWork(pool, func(pgx.Tx) app.Outbox { return logOutbox{log} })
+	orders := app.NewOrderService(uow, time.Now, order.NewID)
+
 	h := health.New(2 * time.Second)
 	h.Add("postgres", pool.Ping)
 	mux := http.NewServeMux()
 	h.Register(mux)
+	httpapi.New(mux, orders, log)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTP.Address,
-		Handler:           mux,
+		Handler:           httpmw.Chain(mux, httpmw.RequestID, httpmw.AccessLog(log), httpmw.Recover(log)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -86,4 +97,15 @@ func loadConfig(args []string) (config.Config, error) {
 		opts.File = "configs/api.yaml"
 	}
 	return config.Load(opts)
+}
+
+// logOutbox journalise les événements au lieu de les publier. Provisoire : la
+// publication par Watermill (outbox SQL puis NATS JetStream) la remplace.
+type logOutbox struct{ log *slog.Logger }
+
+func (o logOutbox) Add(ctx context.Context, events ...order.Event) error {
+	for _, e := range events {
+		o.log.InfoContext(ctx, "event (not published yet)", "type", e.EventType(), "order_id", e.AggregateID().String())
+	}
+	return nil
 }
