@@ -3,7 +3,7 @@ GOLANGCI_IMAGE := docker.io/golangci/golangci-lint:v2.15.0
 # Podman sans root : keep-id garde l'identité de l'utilisateur dans le conteneur.
 CONTAINER_USER := $(if $(shell docker --version 2>/dev/null | grep -i podman),--userns=keep-id,--user $(shell id -u):$(shell id -g))
 
-.PHONY: up-apps help build test check lint vuln cover clean up down run-api run-worker images generate openapi diagrams config-reference
+.PHONY: e2e up-apps help build test check lint vuln cover clean up down run-api run-worker images generate openapi diagrams config-reference
 
 ## help : liste les cibles
 help:
@@ -78,6 +78,10 @@ run-api:
 ## run-worker : lance le worker (après make up)
 run-worker:
 	go run ./cmd/worker -config configs/worker.yaml
+
+## e2e : teste les binaires compilés, face à PostgreSQL et à chaque broker (Testcontainers)
+e2e:
+	$(TC_ENV) go test -count=1 -v ./test/e2e
 
 ## check : formatage, analyse statique et tests (avant chaque commit)
 check:

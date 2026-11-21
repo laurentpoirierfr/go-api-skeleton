@@ -46,9 +46,14 @@ var (
 // Redpanda limite les téléchargements anonymes).
 const RedpandaImage = "docker.io/redpandadata/redpanda:v25.2.4"
 
-// Main lance les tests du paquet, puis arrête les conteneurs démarrés.
-func Main(m *testing.M) {
+// Main lance les tests du paquet, puis arrête les conteneurs démarrés, et
+// appelle cleanups : os.Exit, qui termine le programme, ne lance pas les
+// defer de TestMain.
+func Main(m *testing.M, cleanups ...func()) {
 	code := m.Run()
+	for _, c := range cleanups {
+		c()
+	}
 	mu.Lock()
 	for _, c := range containers {
 		_ = testcontainers.TerminateContainer(c)

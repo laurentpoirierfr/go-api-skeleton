@@ -2,6 +2,17 @@
 
 Squelette d'API Go : HTTP, PostgreSQL, outbox et NATS JetStream.
 
+## Tests
+
+| Niveau | Ce qui est testé | Commande |
+|--------|------------------|----------|
+| unitaires | domaine, cas d'usage (adaptateurs en mémoire), configuration, middlewares | `make check` (avec `-short`) |
+| intégration | adaptateurs face à un vrai PostgreSQL, NATS et Redpanda (Testcontainers) : suite de contrat des dépôts, outbox, consommateur, propagation des traces | `make test` |
+| bout en bout | les binaires compilés, lancés comme des processus et configurés par l'environnement : la vie d'une commande par l'API HTTP, jusqu'à la notification du worker, avec chaque broker | `make e2e` |
+
+Les tests d'intégration et de bout en bout ont besoin de Docker, ou de Podman
+(son socket utilisateur : `systemctl --user enable --now podman.socket`).
+
 ## Schémas
 
 Le dossier [`assets/`](assets/README.md) décrit le squelette en schémas : architecture
