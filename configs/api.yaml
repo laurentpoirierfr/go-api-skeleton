@@ -1,0 +1,22 @@
+# Configuration du binaire api, pour le développement local (compose.yaml).
+# Chaque clé est surchargeable par une variable d'environnement : http.address
+# par HTTP_ADDRESS, postgres.url par POSTGRES_URL, etc. En production, passez
+# les secrets (postgres.url) par l'environnement, jamais par ce fichier.
+service:
+  name: orders-api
+
+http:
+  address: ":8080"
+
+postgres:
+  url: postgres://skeleton:skeleton@localhost:5432/orders?sslmode=disable
+
+nats:
+  url: nats://localhost:4222
+
+log:
+  level: info
+  format: text # json en production
+
+shutdown:
+  timeout: 15s
