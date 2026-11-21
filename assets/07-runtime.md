@@ -14,20 +14,22 @@ flowchart LR
     subgraph deps["Dépendances (compose.yaml)"]
         pg[("PostgreSQL 17<br/>:5432")]
         nats[["broker, au choix :<br/>NATS 2.12 JetStream :4222<br/>ou Redpanda :19092"]]
-        jaeger["Jaeger<br/>OTLP :4317/:4318<br/>UI :16686"]
+        otel["collecteur OpenTelemetry<br/>OTLP :4317/:4318"]
+        jaeger["Jaeger<br/>UI :16686"]
     end
 
     api -->|"transactions,<br/>outbox"| pg
     api -->|"publie orders.*"| nats
     nats -->|"livre orders.*"| worker
     worker -->|"inbox, notifications"| pg
-    api -.->|"traces"| jaeger
-    worker -.->|"traces"| jaeger
+    api -.->|"traces"| otel
+    worker -.->|"traces"| otel
+    otel -.->|"traces"| jaeger
 ```
 
 | Commande | Effet |
 |----------|-------|
-| `make up` | démarre PostgreSQL, NATS et Jaeger, et attend qu'ils soient prêts |
+| `make up` | démarre PostgreSQL, NATS, le collecteur OpenTelemetry et Jaeger, et attend qu'ils soient prêts |
 | `make up BROKER=redpanda` | la même chose avec Redpanda (et sa console sur :8082) |
 | `make run-api`, `make run-worker` | lance un binaire avec `configs/<binaire>.yaml` |
 | `make up-apps` | lance aussi les deux applications, depuis le Dockerfile |

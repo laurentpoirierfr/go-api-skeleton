@@ -42,6 +42,7 @@ type Config struct {
 	Messaging MessagingConfig `mapstructure:"messaging" doc:"Messagerie : publication et consommation des événements"`
 	Consumer  ConsumerConfig  `mapstructure:"consumer" doc:"Consommation des événements (worker seulement)"`
 	Log       LogConfig       `mapstructure:"log" doc:"Journal"`
+	Telemetry TelemetryConfig `mapstructure:"telemetry" doc:"Traces OpenTelemetry, envoyées au collecteur"`
 	Shutdown  ShutdownConfig  `mapstructure:"shutdown" doc:"Arrêt"`
 }
 
@@ -86,6 +87,12 @@ type ConsumerConfig struct {
 type LogConfig struct {
 	Level  string `mapstructure:"level" default:"info" doc:"Niveau : debug, info, warn ou error"`
 	Format string `mapstructure:"format" default:"json" doc:"Format : json (production) ou text (développement)"`
+}
+
+type TelemetryConfig struct {
+	Enabled     bool    `mapstructure:"enabled" default:"false" doc:"Envoyer les traces au collecteur OpenTelemetry"`
+	Endpoint    string  `mapstructure:"endpoint" default:"http://localhost:4318" doc:"URL du collecteur, en OTLP HTTP"`
+	SampleRatio float64 `mapstructure:"sample_ratio" default:"1" doc:"Part des nouvelles traces gardées, de 0 à 1 (une trace commencée ailleurs garde sa décision)"`
 }
 
 type ShutdownConfig struct {
@@ -196,6 +203,14 @@ func (c Config) validate() error {
 	}
 	if c.Log.Format != "json" && c.Log.Format != "text" {
 		errs = append(errs, fmt.Errorf("log.format: %q, expected json or text", c.Log.Format))
+	}
+	if c.Telemetry.Enabled {
+		if err := checkURL(c.Telemetry.Endpoint, "http", "https"); err != nil {
+			errs = append(errs, fmt.Errorf("telemetry.endpoint: %w", err))
+		}
+	}
+	if c.Telemetry.SampleRatio < 0 || c.Telemetry.SampleRatio > 1 {
+		errs = append(errs, fmt.Errorf("telemetry.sample_ratio: %v, expected 0 to 1", c.Telemetry.SampleRatio))
 	}
 	if c.Shutdown.Timeout <= 0 {
 		errs = append(errs, fmt.Errorf("shutdown.timeout: %v, must be positive", c.Shutdown.Timeout))

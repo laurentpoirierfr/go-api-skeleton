@@ -38,6 +38,7 @@ func TestRun(t *testing.T) {
 	// Aucune dépendance réelle : le test ne doit jamais toucher l'environnement
 	// de développement (compose), même s'il tourne.
 	t.Setenv("MESSAGING_NATS_URL", "nats://127.0.0.1:1")
+	t.Setenv("TELEMETRY_ENABLED", "false")
 	var logs syncBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)

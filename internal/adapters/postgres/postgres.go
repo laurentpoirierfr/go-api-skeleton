@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/exaring/otelpgx"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // pilote pgx v5, schéma « pgx5:// »
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -27,6 +28,9 @@ func Connect(ctx context.Context, url string, maxConns int32) (*pgxpool.Pool, er
 	if maxConns > 0 {
 		cfg.MaxConns = maxConns
 	}
+	// Un span par requête SQL, rattaché à la trace en cours. Le fournisseur de
+	// traces global doit être installé avant (telemetry.Setup).
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
 	return pgxpool.NewWithConfig(ctx, cfg)
 }
 

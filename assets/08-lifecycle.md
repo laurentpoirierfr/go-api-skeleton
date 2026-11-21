@@ -11,6 +11,7 @@ sequenceDiagram
     participant H as health
 
     Main->>Main: config : défauts → YAML → environnement, validée
+    Main->>Main: télémétrie (fournisseur de traces, propagateur W3C)
     Main->>Main: migrations (si postgres.auto_migrate)
     Main->>Main: pool PostgreSQL, connexion NATS (paresseuses)
     Main->>R: Run(http, forwarder)
@@ -26,7 +27,8 @@ sequenceDiagram
     R->>HTTP: Shutdown : termine les requêtes en cours (shutdown.timeout)
     R->>F: arrêt du routeur Watermill
     R-->>Main: tous arrêtés
-    Main->>Main: fermeture NATS et PostgreSQL
+    Main->>Main: fermeture du broker et de PostgreSQL
+    Main->>Main: envoi des dernières traces (5 s au plus)
 ```
 
 Si un composant échoue (port déjà pris, par exemple), le runner arrête les

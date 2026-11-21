@@ -11,10 +11,18 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/app"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/domain/order"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/telemetry"
 )
+
+// tracer crée les spans de la messagerie.
+var tracer = otel.Tracer("github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/messaging")
 
 // OutboxTopic est le topic SQL de l'outbox : la table watermill_outbox
 // (migration 000002).
@@ -49,17 +57,36 @@ func NewOutbox(tx pgx.Tx, logger watermill.LoggerAdapter) app.Outbox {
 	}
 }
 
-// Add enregistre les événements dans la transaction en cours.
+// Add enregistre les événements dans la transaction en cours. Chaque message
+// emporte le contexte de trace (en-tête traceparent) : le traitement par le
+// worker rejoindra la trace de la requête d'origine.
 func (o Outbox) Add(ctx context.Context, events ...order.Event) error {
 	for _, e := range events {
-		topic, msg, err := Encode(e, uuid.Must(uuid.NewV7()).String(), o.now())
-		if err != nil {
+		if err := o.add(ctx, e); err != nil {
 			return err
 		}
-		msg.SetContext(ctx)
-		if err := o.pub.Publish(topic, msg); err != nil {
-			return fmt.Errorf("outbox %s: %w", e.EventType(), err)
-		}
+	}
+	return nil
+}
+
+func (o Outbox) add(ctx context.Context, e order.Event) error {
+	id := uuid.Must(uuid.NewV7()).String()
+	topic, msg, err := Encode(e, id, o.now())
+	if err != nil {
+		return err
+	}
+	ctx, span := tracer.Start(ctx, topic+" send", trace.WithSpanKind(trace.SpanKindProducer), trace.WithAttributes(
+		attribute.String("messaging.operation.type", "send"),
+		attribute.String("messaging.destination.name", topic),
+		attribute.String("messaging.message.id", id),
+	))
+	defer span.End()
+	telemetry.Inject(ctx, msg.Metadata)
+	msg.SetContext(ctx)
+	if err := o.pub.Publish(topic, msg); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("outbox %s: %w", e.EventType(), err)
 	}
 	return nil
 }

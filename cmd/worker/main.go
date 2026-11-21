@@ -24,6 +24,7 @@ import (
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/httpmw"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/logger"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/runner"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/telemetry"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/version"
 )
 
@@ -54,6 +55,24 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	log := logger.New(out, cfg.Log.Format, cfg.Log.SlogLevel(), cfg.Service.Name, version.Version)
 	log.Info("configuration", "http", cfg.HTTP.Address, "postgres", cfg.Postgres.Redacted(), "broker", cfg.Messaging.Broker)
+
+	// La télémétrie d'abord : les connexions créées ensuite (PostgreSQL)
+	// utilisent son fournisseur de traces.
+	shutdownTelemetry, err := telemetry.Setup(ctx, telemetry.Options{
+		Enabled: cfg.Telemetry.Enabled, Endpoint: cfg.Telemetry.Endpoint, SampleRatio: cfg.Telemetry.SampleRatio,
+		Service: cfg.Service.Name, Version: version.Version,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Les dernières traces partent à l'arrêt, dans un délai borné.
+		flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(flush); err != nil {
+			log.Warn("telemetry shutdown", "err", err)
+		}
+	}()
 
 	if cfg.Postgres.AutoMigrate {
 		v, err := postgres.Migrate(cfg.Postgres.URL)
@@ -98,7 +117,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	h.Register(mux)
 	srv := &http.Server{
 		Addr:              cfg.HTTP.Address,
-		Handler:           httpmw.Chain(mux, httpmw.RequestID, httpmw.AccessLog(log), httpmw.Recover(log)),
+		Handler:           httpmw.Chain(mux, httpmw.RequestID, httpmw.Tracing, httpmw.AccessLog(log), httpmw.Recover(log)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return runner.Run(ctx, log,

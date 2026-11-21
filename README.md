@@ -46,8 +46,8 @@ tout broker Kafka). Le domaine, l'outbox, le format des messages et
 l'idempotence du worker sont communs ; seul l'adaptateur change.
 
 ```bash
-make up                          # PostgreSQL, Jaeger et NATS
-make up BROKER=redpanda          # PostgreSQL, Jaeger et Redpanda (console : http://localhost:8082)
+make up                          # PostgreSQL, collecteur OpenTelemetry, Jaeger et NATS
+make up BROKER=redpanda          # la même chose avec Redpanda (console : http://localhost:8082)
 MESSAGING_BROKER=redpanda make run-api
 ```
 
@@ -62,6 +62,28 @@ Les deux brokers n'offrent pas les mêmes garanties :
 | Topologie | streams `ORDERS` et `DLQ` | topics `orders.created`, `orders.cancelled`, `dlq.<consommateur>` |
 
 Les mêmes tests d'intégration tournent contre les deux brokers.
+
+## Observabilité : traces OpenTelemetry
+
+Les deux binaires envoient leurs traces en OTLP au **collecteur
+OpenTelemetry** (`deploy/otel-collector.yaml`), qui les relaie vers Jaeger :
+changer de backend ne touche que la configuration du collecteur.
+
+```text
+api, worker ──OTLP :4318──▶ collecteur ──▶ Jaeger (http://localhost:16686)
+```
+
+Une même trace suit une commande de bout en bout : la requête HTTP (nommée par
+sa route), chaque requête SQL, la publication de l'événement, puis son
+traitement par le worker. Le contexte traverse l'outbox et le broker dans
+l'en-tête `traceparent` du message, avec NATS comme avec Redpanda. Chaque ligne
+de journal écrite dans une trace porte `trace_id` et `span_id`.
+
+| Clé | Rôle |
+|-----|------|
+| `telemetry.enabled` | envoyer les traces (activé dans `configs/*.yaml`, désactivé par défaut) |
+| `telemetry.endpoint` | URL OTLP HTTP du collecteur |
+| `telemetry.sample_ratio` | part des nouvelles traces gardées |
 
 ## Fichiers .env d'exemple
 

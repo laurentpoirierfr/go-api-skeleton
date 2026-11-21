@@ -85,6 +85,18 @@ log:
   # env : LOG_FORMAT
   format: "json"
 
+# Traces OpenTelemetry, envoyées au collecteur
+telemetry:
+  # Envoyer les traces au collecteur OpenTelemetry
+  # env : TELEMETRY_ENABLED
+  enabled: false
+  # URL du collecteur, en OTLP HTTP
+  # env : TELEMETRY_ENDPOINT
+  endpoint: "http://localhost:4318"
+  # Part des nouvelles traces gardées, de 0 à 1 (une trace commencée ailleurs garde sa décision)
+  # env : TELEMETRY_SAMPLE_RATIO
+  sample_ratio: 1
+
 # Arrêt
 shutdown:
   # Temps laissé aux traitements en cours, à l'arrêt

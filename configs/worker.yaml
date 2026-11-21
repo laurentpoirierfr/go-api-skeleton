@@ -12,6 +12,9 @@ postgres:
   # En production, les migrations sont lancées à part (false par défaut).
   auto_migrate: true
 
+telemetry:
+  enabled: true # vers le collecteur de compose.yaml (http://localhost:4318)
+
 log:
   format: text # lisible dans un terminal ; json par défaut, pour les collecteurs
 

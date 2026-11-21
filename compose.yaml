@@ -59,11 +59,21 @@ services:
     depends_on:
       redpanda: { condition: service_healthy }
 
-  # Les traces OpenTelemetry (OTLP sur 4317 et 4318), consultables sur
+  # Le collecteur OpenTelemetry : les applications lui envoient leurs traces
+  # (OTLP, 4317 en gRPC, 4318 en HTTP), il les relaie vers Jaeger. Sa
+  # configuration : deploy/otel-collector.yaml.
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:0.140.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro,z"]
+    ports: ["4317:4317", "4318:4318", "13133:13133"]
+    depends_on: [jaeger]
+
+  # Jaeger reçoit les traces du collecteur ; son interface est sur
   # http://localhost:16686.
   jaeger:
     image: docker.io/jaegertracing/jaeger:2.22.0
-    ports: ["16686:16686", "4317:4317", "4318:4318"]
+    ports: ["16686:16686"]
 
   # Les applications elles-mêmes, construites depuis le Dockerfile. Elles ne
   # démarrent qu'avec le profil « apps » : make up ne lance que les
@@ -77,9 +87,12 @@ services:
       MESSAGING_BROKER: ${BROKER:-nats}
       MESSAGING_NATS_URL: nats://nats:4222
       MESSAGING_REDPANDA_BROKERS: redpanda:9092
+      TELEMETRY_ENABLED: "true"
+      TELEMETRY_ENDPOINT: http://otel-collector:4318
     ports: ["8080:8080"]
     depends_on: &app-deps
       postgres: { condition: service_healthy }
+      otel-collector: { condition: service_started }
       # Seul le broker choisi est démarré (profil nats ou redpanda).
       nats: { condition: service_healthy, required: false }
       redpanda: { condition: service_healthy, required: false }

@@ -44,6 +44,11 @@ sequenceDiagram
     W-->>JS: Ack
 ```
 
+**La trace** : chaque étape de ce schéma est un span de la même trace
+OpenTelemetry, visible dans Jaeger. Le contexte voyage avec le message
+(en-tête `traceparent`, écrit à l'étape 7) : le span du worker (étape 15) est
+l'enfant du span de publication.
+
 **Si le broker est indisponible** : les étapes 1 à 10 fonctionnent normalement, le
 client reçoit 201 ; l'événement attend dans `watermill_outbox`, et le
 forwarder le publie au retour du broker. `/health/ready` signale la coupure.

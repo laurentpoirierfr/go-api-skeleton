@@ -14,9 +14,13 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/message/router/middleware"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/domain/order"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/runner"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/telemetry"
 )
 
 // EventHandler traite un événement reçu, et renvoie vrai s'il a produit un
@@ -69,7 +73,7 @@ func Consumer(b Broker, h EventHandler, log *slog.Logger, wl watermill.LoggerAda
 	}
 	// Le premier middleware est le plus extérieur : la DLQ reçoit ce que les
 	// essais n'ont pas résolu ; Recoverer change une panique en erreur.
-	var mws []message.HandlerMiddleware
+	mws := []message.HandlerMiddleware{traceProcessing}
 	if !b.DelaysRedelivery() {
 		mws = append(mws, emulateRedelivery(backoff(cfg.Backoff)))
 	}
@@ -102,6 +106,28 @@ func Consumer(b Broker, h EventHandler, log *slog.Logger, wl watermill.LoggerAda
 		}
 		return router.Run(ctx)
 	}}, nil
+}
+
+// traceProcessing reprend le contexte de trace du message (traceparent, écrit
+// par l'outbox) et ouvre un span « process » : le traitement rejoint la trace
+// de la requête qui a produit l'événement.
+func traceProcessing(next message.HandlerFunc) message.HandlerFunc {
+	return func(msg *message.Message) ([]*message.Message, error) {
+		ctx := telemetry.Extract(msg.Context(), msg.Metadata)
+		ctx, span := tracer.Start(ctx, msg.Metadata.Get(HeaderType)+" process", trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(
+			attribute.String("messaging.operation.type", "process"),
+			attribute.String("messaging.message.id", msg.UUID),
+			attribute.String("messaging.consumer.group.name", message.HandlerNameFromCtx(msg.Context())),
+		))
+		defer span.End()
+		msg.SetContext(ctx)
+		out, err := next(msg)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		return out, err
+	}
 }
 
 // handle traduit un message en appel du cas d'usage, et classe les échecs.
