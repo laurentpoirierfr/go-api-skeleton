@@ -34,6 +34,7 @@ func TestRun(t *testing.T) {
 	ln.Close()
 	t.Setenv("HTTP_ADDRESS", addr)
 	t.Setenv("POSTGRES_URL", "postgres://u:secret@localhost/db")
+	t.Setenv("POSTGRES_AUTO_MIGRATE", "false") // pas de base dans ce test : la connexion est paresseuse
 	var logs syncBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)

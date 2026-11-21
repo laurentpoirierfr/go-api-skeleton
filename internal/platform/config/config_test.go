@@ -53,6 +53,7 @@ shutdown:
 `)
 	t.Setenv("HTTP_ADDRESS", ":9999")
 	t.Setenv("SHUTDOWN_TIMEOUT", "7s")
+	t.Setenv("POSTGRES_AUTO_MIGRATE", "true")
 	c, err := Load(Options{File: path, FileRequired: true, Defaults: defaults})
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +62,7 @@ shutdown:
 		c.Log.SlogLevel() != slog.LevelDebug || c.Log.Format != "text" {
 		t.Errorf("file not applied: %+v", c)
 	}
-	if c.HTTP.Address != ":9999" || c.Shutdown.Timeout != 7*time.Second {
+	if c.HTTP.Address != ":9999" || c.Shutdown.Timeout != 7*time.Second || !c.Postgres.AutoMigrate || c.Postgres.MaxConns != 10 {
 		t.Errorf("environment not applied: %+v", c)
 	}
 }
@@ -126,7 +127,7 @@ func TestShippedFiles(t *testing.T) {
 // LOG_LEVEL ou un POSTGRES_URL de son shell changerait les résultats. Viper
 // traite une variable vide comme absente.
 func TestMain(m *testing.M) {
-	for _, key := range []string{"SERVICE_NAME", "HTTP_ADDRESS", "POSTGRES_URL", "NATS_URL", "LOG_LEVEL", "LOG_FORMAT", "SHUTDOWN_TIMEOUT"} {
+	for _, key := range []string{"SERVICE_NAME", "HTTP_ADDRESS", "POSTGRES_URL", "NATS_URL", "LOG_LEVEL", "LOG_FORMAT", "SHUTDOWN_TIMEOUT", "POSTGRES_MAX_CONNS", "POSTGRES_AUTO_MIGRATE"} {
 		os.Setenv(key, "")
 	}
 	os.Exit(m.Run())

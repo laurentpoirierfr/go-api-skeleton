@@ -3,7 +3,7 @@ GOLANGCI_IMAGE := docker.io/golangci/golangci-lint:v2.15.0
 # Podman sans root : keep-id garde l'identité de l'utilisateur dans le conteneur.
 CONTAINER_USER := $(if $(shell docker --version 2>/dev/null | grep -i podman),--userns=keep-id,--user $(shell id -u):$(shell id -g))
 
-.PHONY: help build test check lint vuln cover clean up down run-api run-worker images
+.PHONY: help build test check lint vuln cover clean up down run-api run-worker images generate
 
 ## help : liste les cibles
 help:
@@ -13,9 +13,15 @@ help:
 build:
 	go build -o bin/ ./cmd/...
 
-## test : lance tous les tests
+# Testcontainers parle au démon Docker ; avec Podman, à son socket (ryuk, le
+# nettoyeur de Testcontainers, demande des privilèges : les tests arrêtent
+# eux-mêmes leurs conteneurs).
+PODMAN_SOCK := /run/user/$(shell id -u)/podman/podman.sock
+TC_ENV := $(if $(wildcard $(PODMAN_SOCK)),DOCKER_HOST=unix://$(PODMAN_SOCK) TESTCONTAINERS_RYUK_DISABLED=true)
+
+## test : lance tous les tests, y compris d'intégration (Testcontainers)
 test:
-	go test ./...
+	$(TC_ENV) go test ./...
 
 # La version des images : le dernier tag, et le commit s'il y en a d'autres depuis.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -25,6 +31,12 @@ IMAGE ?= go-api-skeleton
 images:
 	docker build --build-arg APP=api --build-arg PORT=8080 --build-arg VERSION=$(VERSION) -t $(IMAGE)-api:$(VERSION) .
 	docker build --build-arg APP=worker --build-arg PORT=8081 --build-arg VERSION=$(VERSION) -t $(IMAGE)-worker:$(VERSION) .
+
+SQLC_IMAGE := docker.io/sqlc/sqlc:1.31.1
+
+## generate : régénère le code (sqlc)
+generate:
+	docker run --rm --volume "$(CURDIR):/src" --workdir /src $(CONTAINER_USER) $(SQLC_IMAGE) generate
 
 ## up : démarre les dépendances (PostgreSQL, NATS, Jaeger) et attend qu'elles soient prêtes
 up:

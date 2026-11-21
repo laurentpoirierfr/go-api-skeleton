@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/postgres"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/config"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/health"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/logger"
@@ -39,7 +40,21 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	log := logger.New(out, cfg.Log.Format, cfg.Log.SlogLevel(), cfg.Service.Name, version.Version)
 	log.Info("configuration", "http", cfg.HTTP.Address, "postgres", cfg.Postgres.Redacted(), "nats", cfg.NATS.URL)
 
+	if cfg.Postgres.AutoMigrate {
+		v, err := postgres.Migrate(cfg.Postgres.URL)
+		if err != nil {
+			return err
+		}
+		log.Info("database migrated", "schema_version", v)
+	}
+	pool, err := postgres.Connect(ctx, cfg.Postgres.URL, cfg.Postgres.MaxConns)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
 	h := health.New(2 * time.Second)
+	h.Add("postgres", pool.Ping)
 	mux := http.NewServeMux()
 	h.Register(mux)
 

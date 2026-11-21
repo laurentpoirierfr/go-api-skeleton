@@ -10,6 +10,8 @@ http:
 
 postgres:
   url: postgres://skeleton:skeleton@localhost:5432/orders?sslmode=disable
+  max_conns: 10
+  auto_migrate: true # en production : false, et migrations lancées à part
 
 nats:
   url: nats://localhost:4222

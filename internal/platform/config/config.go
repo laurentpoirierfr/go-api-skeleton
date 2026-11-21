@@ -42,7 +42,9 @@ type HTTPConfig struct {
 }
 
 type PostgresConfig struct {
-	URL string `mapstructure:"url"` // obligatoire ; en production, par variable d'environnement
+	URL         string `mapstructure:"url"`          // obligatoire ; en production, par variable d'environnement
+	MaxConns    int32  `mapstructure:"max_conns"`    // taille du pool de connexions
+	AutoMigrate bool   `mapstructure:"auto_migrate"` // migrer le schéma au démarrage (pratique en développement)
 }
 
 type NATSConfig struct {
@@ -102,6 +104,8 @@ func setDefaults(v *viper.Viper, d Config) {
 	v.SetDefault("service.name", d.Service.Name)
 	v.SetDefault("http.address", d.HTTP.Address)
 	v.SetDefault("postgres.url", "")
+	v.SetDefault("postgres.max_conns", 10)
+	v.SetDefault("postgres.auto_migrate", false)
 	v.SetDefault("nats.url", "nats://localhost:4222")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
@@ -118,6 +122,9 @@ func (c Config) validate() error {
 	}
 	if err := checkURL(c.Postgres.URL, "postgres", "postgresql"); err != nil {
 		errs = append(errs, fmt.Errorf("postgres.url: %w", err))
+	}
+	if c.Postgres.MaxConns < 1 || c.Postgres.MaxConns > 1000 {
+		errs = append(errs, fmt.Errorf("postgres.max_conns: %d, expected 1 to 1000", c.Postgres.MaxConns))
 	}
 	if err := checkURL(c.NATS.URL, "nats", "tls"); err != nil {
 		errs = append(errs, fmt.Errorf("nats.url: %w", err))
