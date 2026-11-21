@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -127,8 +128,33 @@ func TestShippedFiles(t *testing.T) {
 // LOG_LEVEL ou un POSTGRES_URL de son shell changerait les résultats. Viper
 // traite une variable vide comme absente.
 func TestMain(m *testing.M) {
-	for _, key := range []string{"SERVICE_NAME", "HTTP_ADDRESS", "POSTGRES_URL", "NATS_URL", "LOG_LEVEL", "LOG_FORMAT", "SHUTDOWN_TIMEOUT", "POSTGRES_MAX_CONNS", "POSTGRES_AUTO_MIGRATE"} {
+	for _, key := range []string{"SERVICE_NAME", "HTTP_ADDRESS", "POSTGRES_URL", "NATS_URL", "LOG_LEVEL", "LOG_FORMAT", "SHUTDOWN_TIMEOUT", "POSTGRES_MAX_CONNS", "POSTGRES_AUTO_MIGRATE",
+		"CONSUMER_MAX_DELIVERIES", "CONSUMER_ACK_WAIT", "CONSUMER_RETRIES", "CONSUMER_RETRY_INTERVAL", "CONSUMER_BACKOFF"} {
 		os.Setenv(key, "")
 	}
 	os.Exit(m.Run())
+}
+
+func TestConsumer(t *testing.T) {
+	t.Setenv("POSTGRES_URL", "postgres://localhost/db")
+	c, err := Load(Options{Defaults: defaults})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Consumer.MaxDeliveries != 5 || c.Consumer.AckWait != 30*time.Second ||
+		!slices.Equal(c.Consumer.Backoff, []time.Duration{time.Second, 5 * time.Second, 30 * time.Second, 2 * time.Minute}) {
+		t.Errorf("defaults: %+v", c.Consumer)
+	}
+	// Une liste de durées se surcharge par une variable, séparée par des virgules.
+	t.Setenv("CONSUMER_BACKOFF", "2s,10s")
+	t.Setenv("CONSUMER_MAX_DELIVERIES", "8")
+	c, err = Load(Options{Defaults: defaults})
+	if err != nil || c.Consumer.MaxDeliveries != 8 || !slices.Equal(c.Consumer.Backoff, []time.Duration{2 * time.Second, 10 * time.Second}) {
+		t.Errorf("env: %+v %v", c.Consumer, err)
+	}
+	t.Setenv("CONSUMER_MAX_DELIVERIES", "0")
+	t.Setenv("CONSUMER_BACKOFF", "-1s")
+	if _, err := Load(Options{Defaults: defaults}); err == nil || !strings.Contains(err.Error(), "consumer.max_deliveries") || !strings.Contains(err.Error(), "consumer.backoff") {
+		t.Errorf("validation: %v", err)
+	}
 }

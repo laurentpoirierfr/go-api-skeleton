@@ -16,7 +16,3 @@ directement par GitHub, et vérifié par `make diagrams`.
 | [7. Exécution](07-runtime.md) | les binaires, les dépendances, les ports, les sondes |
 | [8. Démarrage et arrêt](08-lifecycle.md) | l'ordre de démarrage, l'arrêt propre |
 
-> [!NOTE]
-> La consommation des événements par le worker (essais, file des messages
-> morts, idempotence) est en cours de réalisation : les schémas 3 et 4 la
-> décrivent telle qu'elle est conçue.

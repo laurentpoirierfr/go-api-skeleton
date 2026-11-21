@@ -31,6 +31,7 @@ type Config struct {
 	NATS     NATSConfig     `mapstructure:"nats"`
 	Log      LogConfig      `mapstructure:"log"`
 	Shutdown ShutdownConfig `mapstructure:"shutdown"`
+	Consumer ConsumerConfig `mapstructure:"consumer"` // le worker seulement
 }
 
 type ServiceConfig struct {
@@ -58,6 +59,15 @@ type LogConfig struct {
 
 type ShutdownConfig struct {
 	Timeout time.Duration `mapstructure:"timeout"` // temps laissé aux traitements en cours
+}
+
+// ConsumerConfig règle la consommation des événements (worker).
+type ConsumerConfig struct {
+	MaxDeliveries int             `mapstructure:"max_deliveries"` // au-delà, un message en échec part en DLQ
+	AckWait       time.Duration   `mapstructure:"ack_wait"`       // sans acquittement dans ce délai, relivraison
+	Retries       int             `mapstructure:"retries"`        // essais rapides, dans le processus
+	RetryInterval time.Duration   `mapstructure:"retry_interval"`
+	Backoff       []time.Duration `mapstructure:"backoff"` // délai avant chaque relivraison (CONSUMER_BACKOFF=1s,5s,30s)
 }
 
 // Options dit où trouver la configuration.
@@ -110,6 +120,11 @@ func setDefaults(v *viper.Viper, d Config) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("shutdown.timeout", "15s")
+	v.SetDefault("consumer.max_deliveries", 5)
+	v.SetDefault("consumer.ack_wait", "30s")
+	v.SetDefault("consumer.retries", 3)
+	v.SetDefault("consumer.retry_interval", "100ms")
+	v.SetDefault("consumer.backoff", []string{"1s", "5s", "30s", "2m"})
 }
 
 func (c Config) validate() error {
@@ -139,10 +154,33 @@ func (c Config) validate() error {
 	if c.Shutdown.Timeout <= 0 {
 		errs = append(errs, fmt.Errorf("shutdown.timeout: %v, must be positive", c.Shutdown.Timeout))
 	}
+	errs = append(errs, c.Consumer.validate()...)
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("invalid configuration:\n%w", err)
 	}
 	return nil
+}
+
+func (c ConsumerConfig) validate() []error {
+	var errs []error
+	if c.MaxDeliveries < 1 {
+		errs = append(errs, fmt.Errorf("consumer.max_deliveries: %d, must be at least 1", c.MaxDeliveries))
+	}
+	if c.AckWait <= 0 {
+		errs = append(errs, fmt.Errorf("consumer.ack_wait: %v, must be positive", c.AckWait))
+	}
+	if c.Retries < 0 || c.RetryInterval <= 0 {
+		errs = append(errs, fmt.Errorf("consumer.retries and retry_interval: %d, %v", c.Retries, c.RetryInterval))
+	}
+	if len(c.Backoff) == 0 {
+		errs = append(errs, errors.New("consumer.backoff: at least one delay"))
+	}
+	for _, d := range c.Backoff {
+		if d <= 0 {
+			errs = append(errs, fmt.Errorf("consumer.backoff: %v, must be positive", d))
+		}
+	}
+	return errs
 }
 
 // SlogLevel renvoie le niveau de journal (déjà validé par Load).

@@ -35,6 +35,9 @@ func TestRun(t *testing.T) {
 	t.Setenv("HTTP_ADDRESS", addr)
 	t.Setenv("POSTGRES_URL", "postgres://u:secret@localhost/db")
 	t.Setenv("POSTGRES_AUTO_MIGRATE", "false") // pas de base dans ce test : la connexion est paresseuse
+	// Aucune dépendance réelle : le test ne doit jamais toucher l'environnement
+	// de développement (compose), même s'il tourne.
+	t.Setenv("NATS_URL", "nats://127.0.0.1:1")
 	var logs syncBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)

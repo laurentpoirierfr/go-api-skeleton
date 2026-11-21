@@ -12,12 +12,17 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// La topologie JetStream : un stream pour tous les événements des commandes.
+// La topologie JetStream : un stream pour tous les événements des commandes,
+// et un stream pour la file des messages morts (DLQ) de tous les
+// consommateurs.
 const (
 	StreamName        = "ORDERS"
 	StreamSubjects    = "orders.>"
-	DuplicatesWindow  = 2 * time.Minute    // Nats-Msg-Id identiques éliminés pendant cette durée
-	StreamMaxAge      = 7 * 24 * time.Hour // les événements sont gardés une semaine
+	DLQStreamName     = "DLQ"
+	DLQSubjects       = "dlq.>"
+	DLQMaxAge         = 30 * 24 * time.Hour // le temps de les examiner
+	DuplicatesWindow  = 2 * time.Minute     // Nats-Msg-Id identiques éliminés pendant cette durée
+	StreamMaxAge      = 7 * 24 * time.Hour  // les événements sont gardés une semaine
 	connectionTimeout = 5 * time.Second
 )
 
@@ -43,8 +48,8 @@ func Check(conn *nats.Conn) func(context.Context) error {
 	}
 }
 
-// EnsureStream crée ou met à jour le stream des commandes : l'opération est
-// idempotente, chaque binaire peut l'appeler au démarrage.
+// EnsureStream crée ou met à jour le stream des commandes et celui de la DLQ :
+// l'opération est idempotente, chaque binaire peut l'appeler au démarrage.
 func EnsureStream(ctx context.Context, conn *nats.Conn) (jetstream.JetStream, error) {
 	js, err := jetstream.New(conn)
 	if err != nil {
@@ -60,6 +65,16 @@ func EnsureStream(ctx context.Context, conn *nats.Conn) (jetstream.JetStream, er
 	})
 	if err != nil {
 		return nil, fmt.Errorf("stream %s: %w", StreamName, err)
+	}
+	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:       DLQStreamName,
+		Subjects:   []string{DLQSubjects},
+		Storage:    jetstream.FileStorage,
+		MaxAge:     DLQMaxAge,
+		Duplicates: DuplicatesWindow,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("stream %s: %w", DLQStreamName, err)
 	}
 	return js, nil
 }

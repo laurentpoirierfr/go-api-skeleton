@@ -22,3 +22,12 @@ log:
 
 shutdown:
   timeout: 15s
+
+# La consommation des événements : quelques essais rapides dans le processus,
+# puis des relivraisons espacées ; au-delà de max_deliveries, la DLQ.
+consumer:
+  max_deliveries: 5
+  ack_wait: 30s
+  retries: 3
+  retry_interval: 100ms
+  backoff: [1s, 5s, 30s, 2m]

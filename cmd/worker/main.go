@@ -1,5 +1,5 @@
-// Command worker consomme les événements des commandes dans NATS JetStream.
-// Il expose seulement ses sondes de santé en HTTP.
+// Command worker consomme les événements des commandes dans NATS JetStream,
+// et notifie les clients. Il expose seulement ses sondes de santé en HTTP.
 package main
 
 import (
@@ -13,9 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ThreeDotsLabs/watermill"
+	"github.com/google/uuid"
+
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/messaging"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/postgres"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/app"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/config"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/health"
+	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/httpmw"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/logger"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/runner"
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/platform/version"
@@ -53,17 +59,43 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	defer pool.Close()
 
+	// Le worker ne publie rien : son unité de travail n'a pas d'outbox.
+	uow := postgres.NewUnitOfWork(pool, nil)
+	notifications := app.NewNotificationService(uow, time.Now, func() string { return uuid.Must(uuid.NewV7()).String() })
+
+	conn, err := messaging.Connect(cfg.NATS.URL, cfg.Service.Name)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	consumer, err := messaging.Consumer(conn, notifications, log,
+		watermill.NewSlogLogger(log.With("component", "watermill")),
+		messaging.ConsumerConfig{
+			Name:          app.NotificationConsumer,
+			MaxDeliveries: cfg.Consumer.MaxDeliveries,
+			AckWait:       cfg.Consumer.AckWait,
+			Retries:       cfg.Consumer.Retries,
+			RetryInterval: cfg.Consumer.RetryInterval,
+			Backoff:       cfg.Consumer.Backoff,
+		})
+	if err != nil {
+		return err
+	}
+
 	h := health.New(2 * time.Second)
 	h.Add("postgres", pool.Ping)
+	h.Add("nats", messaging.Check(conn))
 	mux := http.NewServeMux()
 	h.Register(mux)
-
 	srv := &http.Server{
 		Addr:              cfg.HTTP.Address,
-		Handler:           mux,
+		Handler:           httpmw.Chain(mux, httpmw.RequestID, httpmw.AccessLog(log), httpmw.Recover(log)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	return runner.Run(ctx, log, runner.HTTPServer(srv, cfg.Shutdown.Timeout, h.ShuttingDown))
+	return runner.Run(ctx, log,
+		runner.HTTPServer(srv, cfg.Shutdown.Timeout, h.ShuttingDown),
+		consumer,
+	)
 }
 
 // loadConfig lit le fichier désigné par -config ou CONFIG_FILE (obligatoire
