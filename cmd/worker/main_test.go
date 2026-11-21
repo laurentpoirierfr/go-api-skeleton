@@ -90,7 +90,7 @@ func TestPrintConfig(t *testing.T) {
 	if err := run(context.Background(), []string{"-config", "../../configs/worker.yaml", "-print-config"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"# env POSTGRES_URL", "auto_migrate: true  # fichier", "broker: \"nats\"  # défaut"} {
+	for _, want := range []string{"# env POSTGRES_URL", "auto_migrate: true  # fichier", "max_conns: 10  # défaut"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("%q missing from:\n%s", want, out.String())
 		}
