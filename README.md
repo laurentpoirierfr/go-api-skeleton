@@ -2,6 +2,13 @@
 
 Squelette d'API Go : HTTP, PostgreSQL, outbox et NATS JetStream.
 
+## Schémas
+
+Le dossier [`assets/`](assets/README.md) décrit le squelette en schémas : architecture
+hexagonale, parcours d'une commande jusqu'au worker, cycle de vie d'un message,
+base de données, exécution, démarrage et arrêt. `make diagrams` vérifie qu'ils
+se rendent sans erreur.
+
 ## Développement
 
 ```bash

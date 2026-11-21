@@ -3,7 +3,7 @@ GOLANGCI_IMAGE := docker.io/golangci/golangci-lint:v2.15.0
 # Podman sans root : keep-id garde l'identité de l'utilisateur dans le conteneur.
 CONTAINER_USER := $(if $(shell docker --version 2>/dev/null | grep -i podman),--userns=keep-id,--user $(shell id -u):$(shell id -g))
 
-.PHONY: help build test check lint vuln cover clean up down run-api run-worker images generate openapi
+.PHONY: help build test check lint vuln cover clean up down run-api run-worker images generate openapi diagrams
 
 ## help : liste les cibles
 help:
@@ -41,6 +41,16 @@ generate:
 ## openapi : régénère le contrat api/openapi.yaml à partir du code
 openapi:
 	UPDATE_OPENAPI=1 go test -count=1 -run TestOpenAPISpec ./internal/adapters/httpapi
+
+MERMAID_IMAGE := docker.io/minlag/mermaid-cli:11.12.0
+
+## diagrams : vérifie que les schémas Mermaid d'assets/ se rendent sans erreur
+diagrams:
+	@for f in assets/*.md; do \
+		echo "$$f"; \
+		docker run --rm --volume "$(CURDIR)/assets:/data:ro" $(MERMAID_IMAGE) \
+			-i "/data/$$(basename $$f)" -o "/tmp/$$(basename $$f)" -q || exit 1; \
+		done
 
 ## up : démarre les dépendances (PostgreSQL, NATS, Jaeger) et attend qu'elles soient prêtes
 up:
