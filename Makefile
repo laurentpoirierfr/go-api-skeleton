@@ -3,7 +3,7 @@ GOLANGCI_IMAGE := docker.io/golangci/golangci-lint:v2.15.0
 # Podman sans root : keep-id garde l'identité de l'utilisateur dans le conteneur.
 CONTAINER_USER := $(if $(shell docker --version 2>/dev/null | grep -i podman),--userns=keep-id,--user $(shell id -u):$(shell id -g))
 
-.PHONY: help build test check lint vuln cover clean up down run-api run-worker images generate openapi diagrams
+.PHONY: help build test check lint vuln cover clean up down run-api run-worker images generate openapi diagrams config-reference
 
 ## help : liste les cibles
 help:
@@ -37,6 +37,10 @@ SQLC_IMAGE := docker.io/sqlc/sqlc:1.31.1
 ## generate : régénère le code (sqlc)
 generate:
 	docker run --rm --volume "$(CURDIR):/src" --workdir /src $(CONTAINER_USER) $(SQLC_IMAGE) generate
+
+## config-reference : régénère configs/reference.yaml à partir du code
+config-reference:
+	UPDATE_CONFIG_REFERENCE=1 go test -count=1 -run TestReferenceUpToDate ./internal/platform/config
 
 ## openapi : régénère le contrat api/openapi.yaml à partir du code
 openapi:

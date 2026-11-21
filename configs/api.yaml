@@ -1,24 +1,16 @@
-# Configuration du binaire api, pour le développement local (compose.yaml).
-# Chaque clé est surchargeable par une variable d'environnement : http.address
-# par HTTP_ADDRESS, postgres.url par POSTGRES_URL, etc. En production, passez
-# les secrets (postgres.url) par l'environnement, jamais par ce fichier.
-service:
-  name: orders-api
-
-http:
-  address: ":8080"
+# Configuration du binaire api pour le développement local (make up).
+#
+# Ce fichier ne contient que ce qui diffère des valeurs par défaut : toutes les
+# clés, leur rôle et leur variable d'environnement sont dans reference.yaml.
+# Pour voir la configuration effective et d'où vient chaque valeur :
+#   go run ./cmd/api -print-config
 
 postgres:
+  # Les identifiants de compose.yaml. En production : POSTGRES_URL, jamais ce
+  # fichier.
   url: postgres://skeleton:skeleton@localhost:5432/orders?sslmode=disable
-  max_conns: 10
-  auto_migrate: true # en production : false, et migrations lancées à part
-
-nats:
-  url: nats://localhost:4222
+  # En production, les migrations sont lancées à part (false par défaut).
+  auto_migrate: true
 
 log:
-  level: info
-  format: text # json en production
-
-shutdown:
-  timeout: 15s
+  format: text # lisible dans un terminal ; json par défaut, pour les collecteurs

@@ -1,0 +1,81 @@
+# Référence de la configuration, générée à partir du code
+# (internal/platform/config) : ne pas modifier à la main, lancer
+# « make config-reference ».
+#
+# Ordre de priorité : valeurs par défaut (ci-dessous), puis le fichier YAML du
+# binaire (configs/api.yaml, configs/worker.yaml, ou -config), puis les
+# variables d'environnement. Chaque clé a sa variable : la clé en majuscules,
+# les points remplacés par « _ ».
+#
+# Pour voir la configuration effective d'un binaire, et d'où vient chaque
+# valeur : go run ./cmd/api -print-config
+
+# Identité du service
+service:
+  # Nom du service dans les journaux et les traces ; par défaut orders-api ou orders-worker
+  # env : SERVICE_NAME
+  name: ""
+
+# Serveur HTTP (l'API, ou les sondes du worker)
+http:
+  # Adresse d'écoute ; par défaut :8080 (api) ou :8081 (worker)
+  # env : HTTP_ADDRESS
+  address: ""
+
+# Base de données PostgreSQL
+postgres:
+  # URL de connexion (obligatoire) ; en production, par la variable d'environnement
+  # env : POSTGRES_URL
+  # secret : jamais affiché en clair
+  url: ""
+  # Taille maximale du pool de connexions
+  # env : POSTGRES_MAX_CONNS
+  max_conns: 10
+  # Appliquer les migrations au démarrage (pratique en développement)
+  # env : POSTGRES_AUTO_MIGRATE
+  auto_migrate: false
+
+# Messagerie : publication et consommation des événements
+messaging:
+  # Broker utilisé : nats
+  # env : MESSAGING_BROKER
+  broker: "nats"
+  # NATS JetStream
+  nats:
+    # URL du serveur (plusieurs : séparées par des virgules)
+    # env : MESSAGING_NATS_URL
+    # secret : jamais affiché en clair
+    url: "nats://localhost:4222"
+
+# Consommation des événements (worker seulement)
+consumer:
+  # Au-delà de ce nombre de livraisons, un message en échec part en DLQ
+  # env : CONSUMER_MAX_DELIVERIES
+  max_deliveries: 5
+  # Sans acquittement dans ce délai, le message est relivré
+  # env : CONSUMER_ACK_WAIT
+  ack_wait: 30s
+  # Essais rapides dans le processus, avant de rendre le message au broker
+  # env : CONSUMER_RETRIES
+  retries: 3
+  # Délai avant le premier essai rapide (doublé ensuite)
+  # env : CONSUMER_RETRY_INTERVAL
+  retry_interval: 100ms
+  # Délai avant chaque relivraison ; le dernier s'applique ensuite
+  # env : CONSUMER_BACKOFF
+  backoff: [1s, 5s, 30s, 2m]
+
+# Journal
+log:
+  # Niveau : debug, info, warn ou error
+  # env : LOG_LEVEL
+  level: "info"
+  # Format : json (production) ou text (développement)
+  # env : LOG_FORMAT
+  format: "json"
+
+# Arrêt
+shutdown:
+  # Temps laissé aux traitements en cours, à l'arrêt
+  # env : SHUTDOWN_TIMEOUT
+  timeout: 15s

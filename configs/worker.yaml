@@ -1,33 +1,20 @@
-# Configuration du binaire worker, pour le développement local (compose.yaml).
-# Chaque clé est surchargeable par une variable d'environnement : http.address
-# par HTTP_ADDRESS, postgres.url par POSTGRES_URL, etc. En production, passez
-# les secrets (postgres.url) par l'environnement, jamais par ce fichier.
-service:
-  name: orders-worker
-
-http:
-  address: ":8081"
+# Configuration du binaire worker pour le développement local (make up).
+#
+# Ce fichier ne contient que ce qui diffère des valeurs par défaut : toutes les
+# clés, leur rôle et leur variable d'environnement sont dans reference.yaml.
+# Pour voir la configuration effective et d'où vient chaque valeur :
+#   go run ./cmd/worker -print-config
 
 postgres:
+  # Les identifiants de compose.yaml. En production : POSTGRES_URL, jamais ce
+  # fichier.
   url: postgres://skeleton:skeleton@localhost:5432/orders?sslmode=disable
-  max_conns: 10
-  auto_migrate: true # en production : false, et migrations lancées à part
-
-nats:
-  url: nats://localhost:4222
+  # En production, les migrations sont lancées à part (false par défaut).
+  auto_migrate: true
 
 log:
-  level: info
-  format: text # json en production
+  format: text # lisible dans un terminal ; json par défaut, pour les collecteurs
 
-shutdown:
-  timeout: 15s
-
-# La consommation des événements : quelques essais rapides dans le processus,
-# puis des relivraisons espacées ; au-delà de max_deliveries, la DLQ.
-consumer:
-  max_deliveries: 5
-  ack_wait: 30s
-  retries: 3
-  retry_interval: 100ms
-  backoff: [1s, 5s, 30s, 2m]
+# La consommation des événements garde ses valeurs par défaut (section
+# consumer de reference.yaml) : 3 essais rapides, puis des relivraisons à
+# 1 s, 5 s, 30 s et 2 min, et la DLQ après 5 livraisons.

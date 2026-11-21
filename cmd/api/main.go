@@ -45,12 +45,21 @@ const outboxPollInterval = 200 * time.Millisecond
 // run assemble et lance le binaire ; les tests l'appellent avec leurs propres
 // arguments.
 func run(ctx context.Context, args []string, out io.Writer) error {
-	cfg, err := loadConfig(args)
+	opts, printConfig, err := configOptions(args)
+	if err != nil {
+		return err
+	}
+	if printConfig {
+		text, err := config.Explain(opts)
+		fmt.Fprint(out, text)
+		return err
+	}
+	cfg, err := config.Load(opts)
 	if err != nil {
 		return err
 	}
 	log := logger.New(out, cfg.Log.Format, cfg.Log.SlogLevel(), cfg.Service.Name, version.Version)
-	log.Info("configuration", "http", cfg.HTTP.Address, "postgres", cfg.Postgres.Redacted(), "nats", cfg.NATS.URL)
+	log.Info("configuration", "http", cfg.HTTP.Address, "postgres", cfg.Postgres.Redacted(), "nats", cfg.Messaging.NATS.URL)
 
 	if cfg.Postgres.AutoMigrate {
 		v, err := postgres.Migrate(cfg.Postgres.URL)
@@ -68,7 +77,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	// La messagerie : les événements sont écrits dans l'outbox, avec les
 	// données, puis le forwarder les publie dans NATS JetStream.
 	wmLogger := watermill.NewSlogLogger(log.With("component", "watermill"))
-	conn, err := messaging.Connect(cfg.NATS.URL, cfg.Service.Name)
+	conn, err := messaging.Connect(cfg.Messaging.NATS.URL, cfg.Service.Name)
 	if err != nil {
 		return err
 	}
@@ -116,13 +125,15 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	)
 }
 
-// loadConfig lit le fichier désigné par -config ou CONFIG_FILE (obligatoire
-// alors), sinon configs/api.yaml s'il existe, puis l'environnement.
-func loadConfig(args []string) (config.Config, error) {
+// configOptions lit les options de la ligne de commande : le fichier désigné
+// par -config ou CONFIG_FILE (obligatoire alors), sinon configs/api.yaml s'il
+// existe ; -print-config affiche la configuration effective, sans démarrer.
+func configOptions(args []string) (config.Options, bool, error) {
 	fs := flag.NewFlagSet("api", flag.ContinueOnError)
 	file := fs.String("config", os.Getenv("CONFIG_FILE"), "YAML configuration file")
+	printConfig := fs.Bool("print-config", false, "print the effective configuration and the source of each value, then exit")
 	if err := fs.Parse(args); err != nil {
-		return config.Config{}, err
+		return config.Options{}, false, err
 	}
 	opts := config.Options{
 		File:         *file,
@@ -132,5 +143,5 @@ func loadConfig(args []string) (config.Config, error) {
 	if opts.File == "" {
 		opts.File = "configs/api.yaml"
 	}
-	return config.Load(opts)
+	return opts, *printConfig, nil
 }

@@ -37,7 +37,7 @@ func TestRun(t *testing.T) {
 	t.Setenv("POSTGRES_AUTO_MIGRATE", "false") // pas de base dans ce test : la connexion est paresseuse
 	// Aucune dépendance réelle : le test ne doit jamais toucher l'environnement
 	// de développement (compose), même s'il tourne.
-	t.Setenv("NATS_URL", "nats://127.0.0.1:1")
+	t.Setenv("MESSAGING_NATS_URL", "nats://127.0.0.1:1")
 	var logs syncBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)
@@ -78,5 +78,23 @@ func TestMissingConfigFile(t *testing.T) {
 	err := run(context.Background(), []string{"-config", "absent.yaml"}, &syncBuffer{})
 	if err == nil || !strings.Contains(err.Error(), "absent.yaml") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// -print-config affiche la configuration effective, avec ses sources, et
+// masque les secrets, sans démarrer le binaire.
+func TestPrintConfig(t *testing.T) {
+	t.Setenv("POSTGRES_URL", "postgres://u:secret@db/orders")
+	var out syncBuffer
+	if err := run(context.Background(), []string{"-config", "../../configs/worker.yaml", "-print-config"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# env POSTGRES_URL", "auto_migrate: true  # fichier", "broker: \"nats\"  # défaut"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("%q missing from:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "secret") {
+		t.Errorf("secret visible:\n%s", out.String())
 	}
 }

@@ -18,6 +18,26 @@ make lint    # golangci-lint (dans un conteneur)
 make vuln    # vulnérabilités des dépendances
 ```
 
+## Configuration
+
+Chaque binaire lit, par ordre de priorité croissante :
+
+1. les valeurs par défaut, documentées dans
+   [`configs/reference.yaml`](configs/reference.yaml) (générée à partir du code) ;
+2. son fichier YAML : `configs/api.yaml` ou `configs/worker.yaml`, ou celui de
+   `-config` (ou `CONFIG_FILE`) ;
+3. les variables d'environnement : la clé en majuscules, les points remplacés
+   par `_` (`messaging.nats.url` → `MESSAGING_NATS_URL`).
+
+```bash
+go run ./cmd/api -print-config   # configuration effective, source de chaque valeur, secrets masqués
+make config-reference            # régénère configs/reference.yaml après un changement de Config
+```
+
+Les fichiers de `configs/` ne contiennent que ce qui diffère des valeurs par
+défaut en développement. Une configuration invalide arrête le binaire au
+démarrage, avec la liste complète des erreurs.
+
 ## Images Docker
 
 Un seul `Dockerfile` construit les deux binaires (`--build-arg APP=api|worker`),
@@ -31,7 +51,7 @@ docker compose --profile apps up   # les dépendances et les deux applications
 ```
 
 L'image embarque `configs/<app>.yaml` ; chaque clé reste surchargeable par
-l'environnement (`POSTGRES_URL`, `NATS_URL`…), et le journal y est en JSON.
+l'environnement (`POSTGRES_URL`, `MESSAGING_NATS_URL`…), et le journal y est en JSON.
 
 ## API HTTP
 
