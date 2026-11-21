@@ -22,7 +22,7 @@ flowchart TD
 |----------|-----------|
 | Aucun événement perdu | outbox dans la transaction des données |
 | Aucun événement fantôme | annuler la transaction annule l'événement |
-| Pas de doublon dans le stream | `Nats-Msg-Id` + fenêtre de déduplication JetStream |
+| Pas de doublon dans le stream | NATS : `Nats-Msg-Id` + fenêtre de déduplication ; Redpanda : non garanti, le worker les absorbe |
 | Pas de double effet | `processed_messages` dans la transaction du traitement |
 | Pas de blocage par un message invalide | essais limités, puis file des messages morts |
 
@@ -38,6 +38,13 @@ flowchart TD
 Le consommateur durable a un nombre de livraisons illimité côté JetStream :
 c'est le worker qui décide d'envoyer en DLQ, aucun message n'est abandonné en
 silence.
+
+**Avec Redpanda**, le broker ne diffère pas les relivraisons et ne compte pas
+les livraisons : le worker l'émule (middleware `emulateRedelivery`), en
+attendant le délai de backoff avant de rendre le message. La partition attend
+pendant ce temps, ce qui garde l'ordre des événements d'une même commande. Le
+compte des livraisons est tenu en mémoire : il repart de zéro si le worker
+redémarre.
 
 ## Le format d'un message (CloudEvents, mode binaire)
 

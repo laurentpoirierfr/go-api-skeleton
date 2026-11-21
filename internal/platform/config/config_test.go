@@ -122,6 +122,7 @@ func TestValidationErrors(t *testing.T) {
 		t.Errorf("password in the error:\n%v", err)
 	}
 	t.Setenv("MESSAGING_BROKER", "rabbitmq")
+	t.Setenv("POSTGRES_URL", "postgres://localhost/db")
 	if _, err := Load(Options{Defaults: defaults}); err == nil || !strings.Contains(err.Error(), "messaging.broker") {
 		t.Errorf("unknown broker: %v", err)
 	}
@@ -149,17 +150,65 @@ func TestEveryFieldDocumented(t *testing.T) {
 
 const referencePath = "../../../configs/reference.yaml"
 
-// configs/reference.yaml est généré par le code ; make config-reference le
-// régénère.
-func TestReferenceUpToDate(t *testing.T) {
+// generated vérifie qu'un fichier généré est à jour ; make config-reference
+// les régénère tous.
+func generated(t *testing.T, path, content string) {
+	t.Helper()
 	if os.Getenv("UPDATE_CONFIG_REFERENCE") != "" {
-		if err := os.WriteFile(referencePath, []byte(Reference()), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	current, err := os.ReadFile(referencePath)
-	if err != nil || string(current) != Reference() {
-		t.Errorf("configs/reference.yaml is out of date: run make config-reference (%v)", err)
+	current, err := os.ReadFile(path)
+	if err != nil || string(current) != content {
+		t.Errorf("%s is out of date: run make config-reference (%v)", filepath.Base(path), err)
+	}
+}
+
+func TestReferenceUpToDate(t *testing.T) { generated(t, referencePath, Reference()) }
+
+var envExamples = []struct {
+	binary   string
+	defaults Config
+	exclude  []string
+}{
+	{"api", APIDefaults, []string{"consumer"}},
+	{"worker", WorkerDefaults, nil},
+}
+
+// Les fichiers .env d'exemple sont à jour, et suffisent seuls : chargés comme
+// variables d'environnement, sans fichier YAML, ils donnent une configuration
+// valide, identique à celle du fichier YAML.
+func TestEnvExamples(t *testing.T) {
+	for _, ex := range envExamples {
+		t.Run(ex.binary, func(t *testing.T) {
+			yaml := "../../../configs/" + ex.binary + ".yaml"
+			content, err := EnvExample(Options{File: yaml, FileRequired: true, Defaults: ex.defaults}, "Variables d'environnement du binaire "+ex.binary, ex.exclude...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			generated(t, "../../../configs/"+ex.binary+".env.example", content)
+
+			fromYAML, err := Load(Options{File: yaml, FileRequired: true, Defaults: ex.defaults})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for line := range strings.Lines(content) {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				k, v, _ := strings.Cut(line, "=")
+				t.Setenv(k, v)
+			}
+			fromEnv, err := Load(Options{Defaults: ex.defaults})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(fromEnv, fromYAML) {
+				t.Errorf("from env:\n%+v\nfrom YAML:\n%+v", fromEnv, fromYAML)
+			}
+		})
 	}
 }
 
@@ -214,5 +263,21 @@ func TestShippedFiles(t *testing.T) {
 		if _, err := Load(Options{File: filepath.Join("..", "..", "..", "configs", name), FileRequired: true, Defaults: defaults}); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+func TestRedpanda(t *testing.T) {
+	t.Setenv("POSTGRES_URL", "postgres://localhost/db")
+	t.Setenv("MESSAGING_BROKER", "redpanda")
+	t.Setenv("MESSAGING_REDPANDA_BROKERS", "rp-1:9092,rp-2:9092")
+	c, err := Load(Options{Defaults: defaults})
+	if err != nil || c.Messaging.Broker != "redpanda" || !slices.Equal(c.Messaging.Redpanda.Brokers, []string{"rp-1:9092", "rp-2:9092"}) ||
+		c.Messaging.Redpanda.Partitions != 3 || c.Messaging.Redpanda.ReplicationFactor != 1 {
+		t.Errorf("%+v %v", c.Messaging, err)
+	}
+	t.Setenv("MESSAGING_REDPANDA_BROKERS", "no-port")
+	t.Setenv("MESSAGING_REDPANDA_PARTITIONS", "0")
+	if _, err := Load(Options{Defaults: defaults}); err == nil || !strings.Contains(err.Error(), "expected host:port") || !strings.Contains(err.Error(), "partitions 0") {
+		t.Errorf("validation: %v", err)
 	}
 }

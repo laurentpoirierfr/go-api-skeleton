@@ -59,7 +59,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	log := logger.New(out, cfg.Log.Format, cfg.Log.SlogLevel(), cfg.Service.Name, version.Version)
-	log.Info("configuration", "http", cfg.HTTP.Address, "postgres", cfg.Postgres.Redacted(), "nats", cfg.Messaging.NATS.URL)
+	log.Info("configuration", "http", cfg.HTTP.Address, "postgres", cfg.Postgres.Redacted(), "broker", cfg.Messaging.Broker)
 
 	if cfg.Postgres.AutoMigrate {
 		v, err := postgres.Migrate(cfg.Postgres.URL)
@@ -75,18 +75,14 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	defer pool.Close()
 
 	// La messagerie : les événements sont écrits dans l'outbox, avec les
-	// données, puis le forwarder les publie dans NATS JetStream.
+	// données, puis le forwarder les publie dans le broker choisi.
 	wmLogger := watermill.NewSlogLogger(log.With("component", "watermill"))
-	conn, err := messaging.Connect(cfg.Messaging.NATS.URL, cfg.Service.Name)
+	broker, err := messaging.NewBroker(messaging.OptionsFrom(cfg), wmLogger)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	publisher, err := messaging.NewPublisher(conn, wmLogger)
-	if err != nil {
-		return err
-	}
-	forwarder, err := messaging.Forwarder(pool, publisher, wmLogger, outboxPollInterval)
+	defer broker.Close()
+	forwarder, err := messaging.Forwarder(pool, broker.Publisher(), wmLogger, outboxPollInterval)
 	if err != nil {
 		return err
 	}
@@ -96,7 +92,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 
 	h := health.New(2 * time.Second)
 	h.Add("postgres", pool.Ping)
-	h.Add("nats", messaging.Check(conn))
+	h.Add(broker.Name(), broker.Check)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	httpapi.New(mux, orders, log)
@@ -111,11 +107,12 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	return runner.Run(ctx, log,
 		runner.HTTPServer(srv, cfg.Shutdown.Timeout, h.ShuttingDown),
-		// L'API accepte des commandes même si NATS est indisponible : les
-		// événements attendent dans l'outbox, et le forwarder attend le stream.
+		// L'API accepte des commandes même si le broker est indisponible : les
+		// événements attendent dans l'outbox, et le forwarder attend la
+		// topologie (streams ou topics).
 		runner.Component{Name: forwarder.Name, Run: func(ctx context.Context) error {
-			_, err := messaging.WaitForStream(ctx, conn, 2*time.Second, func(err error) {
-				log.WarnContext(ctx, "waiting for the NATS stream", "err", err)
+			err := messaging.WaitForTopology(ctx, broker, 2*time.Second, func(err error) {
+				log.WarnContext(ctx, "waiting for the broker", "broker", broker.Name(), "err", err)
 			})
 			if err != nil {
 				return nil // annulé pendant l'attente : arrêt normal
@@ -138,7 +135,7 @@ func configOptions(args []string) (config.Options, bool, error) {
 	opts := config.Options{
 		File:         *file,
 		FileRequired: *file != "",
-		Defaults:     config.Config{Service: config.ServiceConfig{Name: "orders-api"}, HTTP: config.HTTPConfig{Address: ":8080"}},
+		Defaults:     config.APIDefaults,
 	}
 	if opts.File == "" {
 		opts.File = "configs/api.yaml"

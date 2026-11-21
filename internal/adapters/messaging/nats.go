@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
+	wmjs "github.com/ThreeDotsLabs/watermill-nats/v2/pkg/jetstream"
 	wmnats "github.com/ThreeDotsLabs/watermill-nats/v2/pkg/nats"
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -26,9 +29,75 @@ const (
 	connectionTimeout = 5 * time.Second
 )
 
-// Connect ouvre la connexion à NATS. Elle se reconnecte d'elle-même : une
-// coupure ne fait pas échouer le programme, et la sonde /health/ready la
-// signale.
+// NATS est le broker NATS JetStream.
+type NATS struct {
+	conn   *nats.Conn
+	pub    message.Publisher
+	logger watermill.LoggerAdapter
+}
+
+// NewNATS se connecte à NATS. La connexion se rétablit d'elle-même : une
+// coupure ne fait pas échouer le programme, et la sonde la signale.
+func NewNATS(url, name string, logger watermill.LoggerAdapter) (*NATS, error) {
+	conn, err := Connect(url, name)
+	if err != nil {
+		return nil, err
+	}
+	pub, err := NewPublisher(conn, logger)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return &NATS{conn: conn, pub: pub, logger: logger}, nil
+}
+
+func (n *NATS) Name() string                    { return "nats" }
+func (n *NATS) Publisher() message.Publisher    { return n.pub }
+func (n *NATS) SubscribeTopics() []string       { return []string{StreamSubjects} }
+func (n *NATS) DelaysRedelivery() bool          { return true }
+func (n *NATS) Close() error                    { n.conn.Close(); return nil }
+func (n *NATS) Check(ctx context.Context) error { return Check(n.conn)(ctx) }
+
+// Conn renvoie la connexion (pour les tests).
+func (n *NATS) Conn() *nats.Conn { return n.conn }
+
+// EnsureTopology crée les streams, puis les consommateurs durables.
+func (n *NATS) EnsureTopology(ctx context.Context, consumers ...ConsumerConfig) error {
+	js, err := EnsureStream(ctx, n.conn)
+	if err != nil {
+		return err
+	}
+	for _, c := range consumers {
+		if err := EnsureConsumer(ctx, js, c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Subscriber rattache Watermill au consommateur durable créé par
+// EnsureTopology. Il a sa propre connexion : à sa fermeture, Watermill draine
+// la connexion qu'il utilise, ce qui couperait une connexion partagée.
+func (n *NATS) Subscriber(c ConsumerConfig) (message.Subscriber, error) {
+	subConn, err := Connect(strings.Join(n.conn.Servers(), ","), n.conn.Opts.Name+"-"+c.Name)
+	if err != nil {
+		return nil, err
+	}
+	return wmjs.NewSubscriber(wmjs.SubscriberConfig{
+		Conn:           subConn,
+		Logger:         n.logger,
+		AckWaitTimeout: c.AckWait,
+		ResourceInitializer: func(ctx context.Context, js jetstream.JetStream, _ string) (jetstream.Consumer, func(context.Context, watermill.LoggerAdapter), error) {
+			cons, err := js.Consumer(ctx, StreamName, c.Name)
+			return cons, nil, err
+		},
+		// JetStream relivre après ce délai, et compte les livraisons.
+		NakDelay:    backoff(c.Backoff),
+		Unmarshaler: deliveryCountUnmarshaler{},
+	})
+}
+
+// Connect ouvre une connexion à NATS, qui se rétablit d'elle-même.
 func Connect(url, name string) (*nats.Conn, error) {
 	return nats.Connect(url,
 		nats.Name(name),
@@ -38,7 +107,7 @@ func Connect(url, name string) (*nats.Conn, error) {
 	)
 }
 
-// Check vérifie la connexion, pour la sonde /health/ready.
+// Check vérifie la connexion.
 func Check(conn *nats.Conn) func(context.Context) error {
 	return func(context.Context) error {
 		if s := conn.Status(); s != nats.CONNECTED {
@@ -48,8 +117,7 @@ func Check(conn *nats.Conn) func(context.Context) error {
 	}
 }
 
-// EnsureStream crée ou met à jour le stream des commandes et celui de la DLQ :
-// l'opération est idempotente, chaque binaire peut l'appeler au démarrage.
+// EnsureStream crée ou met à jour le stream des commandes et celui de la DLQ.
 func EnsureStream(ctx context.Context, conn *nats.Conn) (jetstream.JetStream, error) {
 	js, err := jetstream.New(conn)
 	if err != nil {
@@ -79,9 +147,29 @@ func EnsureStream(ctx context.Context, conn *nats.Conn) (jetstream.JetStream, er
 	return js, nil
 }
 
+// EnsureConsumer crée ou met à jour un consommateur durable : il reprend où
+// il s'était arrêté, même après un redémarrage du worker.
+func EnsureConsumer(ctx context.Context, js jetstream.JetStream, cfg ConsumerConfig) error {
+	_, err := js.CreateOrUpdateConsumer(ctx, StreamName, jetstream.ConsumerConfig{
+		Durable:        cfg.Name,
+		FilterSubjects: []string{StreamSubjects},
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		AckWait:        cfg.AckWait,
+		DeliverPolicy:  jetstream.DeliverAllPolicy,
+		// Illimité : c'est le consommateur qui décide d'envoyer en DLQ, aucun
+		// message n'est abandonné en silence.
+		MaxDeliver:    -1,
+		MaxAckPending: 100,
+	})
+	if err != nil {
+		return fmt.Errorf("consumer %s: %w", cfg.Name, err)
+	}
+	return nil
+}
+
 // NewPublisher publie dans JetStream : sur le sujet égal au topic
 // (orders.created…), avec accusé de réception du serveur, et l'en-tête
-// Nats-Msg-Id égal à l'identifiant du message. Le stream est créé par
+// Nats-Msg-Id égal à l'identifiant du message. Les streams sont créés par
 // EnsureStream, jamais à la volée.
 func NewPublisher(conn *nats.Conn, logger watermill.LoggerAdapter) (*wmnats.Publisher, error) {
 	if conn == nil {
@@ -96,21 +184,4 @@ func NewPublisher(conn *nats.Conn, logger watermill.LoggerAdapter) (*wmnats.Publ
 			TrackMsgID:    true,
 		},
 	}, logger)
-}
-
-// WaitForStream appelle EnsureStream jusqu'à ce qu'il réussisse, ou que ctx
-// soit annulé : un binaire peut démarrer avant NATS, ou pendant une coupure.
-func WaitForStream(ctx context.Context, conn *nats.Conn, retry time.Duration, onError func(error)) (jetstream.JetStream, error) {
-	for {
-		js, err := EnsureStream(ctx, conn)
-		if err == nil {
-			return js, nil
-		}
-		onError(err)
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(retry):
-		}
-	}
 }

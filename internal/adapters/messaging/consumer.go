@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	wmjs "github.com/ThreeDotsLabs/watermill-nats/v2/pkg/jetstream"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/message/router/middleware"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/domain/order"
@@ -28,14 +27,14 @@ type EventHandler interface {
 
 // ConsumerConfig règle un consommateur.
 type ConsumerConfig struct {
-	// Name est le nom du consommateur durable JetStream, et celui du handler.
+	// Name est le nom du consommateur (durable JetStream, groupe Kafka).
 	Name string
 	// MaxDeliveries : au-delà, un message toujours en échec part en DLQ.
 	MaxDeliveries int
-	// AckWait : sans acquittement dans ce délai, JetStream relivre le message.
+	// AckWait : sans acquittement dans ce délai, le message est relivré.
 	AckWait time.Duration
 	// Retries et RetryInterval : les essais rapides, dans le processus, avant
-	// de rendre le message à JetStream (pour les coupures très brèves).
+	// de rendre le message au broker (pour les coupures très brèves).
 	Retries       int
 	RetryInterval time.Duration
 	// Backoff : le délai avant la livraison suivante, selon le numéro de la
@@ -54,71 +53,27 @@ var (
 	errDeadLetter = errors.New("dead letter")
 )
 
-// EnsureConsumer crée ou met à jour le consommateur durable : il reprend où
-// il s'était arrêté, même après un redémarrage du worker.
-func EnsureConsumer(ctx context.Context, js jetstream.JetStream, cfg ConsumerConfig) error {
-	_, err := js.CreateOrUpdateConsumer(ctx, StreamName, jetstream.ConsumerConfig{
-		Durable:        cfg.Name,
-		FilterSubjects: []string{StreamSubjects},
-		AckPolicy:      jetstream.AckExplicitPolicy,
-		AckWait:        cfg.AckWait,
-		DeliverPolicy:  jetstream.DeliverAllPolicy,
-		// Illimité : c'est le consommateur qui décide d'envoyer en DLQ, aucun
-		// message n'est abandonné en silence.
-		MaxDeliver:    -1,
-		MaxAckPending: 100,
-	})
-	if err != nil {
-		return fmt.Errorf("consumer %s: %w", cfg.Name, err)
-	}
-	return nil
-}
-
-// Consumer fait du traitement des événements un composant : il attend le
-// stream, crée le consommateur durable, puis fait tourner le Router
-// Watermill jusqu'à l'annulation du contexte.
-//
-// conn sert à la topologie et à la DLQ. Le subscriber a sa propre connexion,
-// ouverte vers les mêmes serveurs : à sa fermeture, Watermill draine la
-// connexion qu'il utilise, ce qui couperait une connexion partagée.
-func Consumer(conn *nats.Conn, h EventHandler, log *slog.Logger, wl watermill.LoggerAdapter, cfg ConsumerConfig) (runner.Component, error) {
-	subConn, err := Connect(strings.Join(conn.Servers(), ","), conn.Opts.Name+"-"+cfg.Name)
-	if err != nil {
-		return runner.Component{}, err
-	}
-	sub, err := wmjs.NewSubscriber(wmjs.SubscriberConfig{
-		Conn:           subConn,
-		Logger:         wl,
-		AckWaitTimeout: cfg.AckWait,
-		// Le consommateur est le nôtre (EnsureConsumer) : Watermill s'y
-		// rattache, sans créer de stream ni de consommateur à partir du topic.
-		ResourceInitializer: func(ctx context.Context, js jetstream.JetStream, _ string) (jetstream.Consumer, func(context.Context, watermill.LoggerAdapter), error) {
-			c, err := js.Consumer(ctx, StreamName, cfg.Name)
-			return c, nil, err
-		},
-		NakDelay:    backoff(cfg.Backoff),
-		Unmarshaler: deliveryCountUnmarshaler{},
-	})
-	if err != nil {
-		return runner.Component{}, err
-	}
-	dlq, err := NewPublisher(conn, wl)
-	if err != nil {
-		return runner.Component{}, err
-	}
+// Consumer fait du traitement des événements un composant : il attend la
+// topologie du broker, puis fait tourner le Router Watermill jusqu'à
+// l'annulation du contexte.
+func Consumer(b Broker, h EventHandler, log *slog.Logger, wl watermill.LoggerAdapter, cfg ConsumerConfig) (runner.Component, error) {
 	router, err := message.NewRouter(message.RouterConfig{CloseTimeout: cfg.AckWait}, wl)
 	if err != nil {
 		return runner.Component{}, err
 	}
-	// Le premier middleware est le plus extérieur : la DLQ reçoit ce que les
-	// essais n'ont pas résolu ; Recoverer change une panique en erreur.
-	poison, err := middleware.PoisonQueueWithFilter(dlq, "dlq."+cfg.Name, func(err error) bool {
+	poison, err := middleware.PoisonQueueWithFilter(b.Publisher(), DLQTopic(cfg.Name), func(err error) bool {
 		return errors.Is(err, errDeadLetter)
 	})
 	if err != nil {
 		return runner.Component{}, err
 	}
-	router.AddMiddleware(
+	// Le premier middleware est le plus extérieur : la DLQ reçoit ce que les
+	// essais n'ont pas résolu ; Recoverer change une panique en erreur.
+	var mws []message.HandlerMiddleware
+	if !b.DelaysRedelivery() {
+		mws = append(mws, emulateRedelivery(backoff(cfg.Backoff)))
+	}
+	mws = append(mws,
 		poison,
 		middleware.Retry{
 			MaxRetries:      cfg.Retries,
@@ -129,20 +84,21 @@ func Consumer(conn *nats.Conn, h EventHandler, log *slog.Logger, wl watermill.Lo
 		}.Middleware,
 		middleware.Recoverer,
 	)
-	router.AddConsumerHandler(cfg.Name, StreamSubjects, sub, handle(h, log, cfg.MaxDeliveries))
+	router.AddMiddleware(mws...)
 
 	return runner.Component{Name: "consumer " + cfg.Name, Run: func(ctx context.Context) error {
-		js, err := WaitForStream(ctx, conn, 2*time.Second, func(err error) {
-			log.WarnContext(ctx, "waiting for the NATS stream", "err", err)
-		})
+		err := WaitForTopology(ctx, b, 2*time.Second, func(err error) {
+			log.WarnContext(ctx, "waiting for the broker", "broker", b.Name(), "err", err)
+		}, cfg)
 		if err != nil {
 			return nil // annulé pendant l'attente : arrêt normal
 		}
-		if err := EnsureConsumer(ctx, js, cfg); err != nil {
-			if ctx.Err() != nil {
-				return nil // annulé pendant la création : arrêt normal
-			}
+		sub, err := b.Subscriber(cfg)
+		if err != nil {
 			return err
+		}
+		for _, topic := range b.SubscribeTopics() {
+			router.AddConsumerHandler(cfg.Name+"@"+topic, topic, sub, handle(h, log, cfg.MaxDeliveries))
 		}
 		return router.Run(ctx)
 	}}, nil
@@ -162,7 +118,7 @@ func handle(h EventHandler, log *slog.Logger, maxDeliveries int) message.NoPubli
 			if deliveries >= maxDeliveries {
 				return fmt.Errorf("%w after %d deliveries: %w", errDeadLetter, deliveries, err)
 			}
-			return err // Nak : JetStream relivrera après le délai de backoff
+			return err // rendu au broker, qui le relivrera
 		}
 		log.InfoContext(ctx, "event handled", "type", event.EventType(), "message_id", msg.UUID,
 			"order_id", event.AggregateID().String(), "duplicate", !created, "delivery", deliveries)
@@ -170,8 +126,42 @@ func handle(h EventHandler, log *slog.Logger, maxDeliveries int) message.NoPubli
 	}
 }
 
-// deliveryCountUnmarshaler ajoute aux métadonnées le numéro de livraison du
-// message, que le décodeur par défaut ne transmet pas.
+// emulateRedelivery donne à un broker sans relivraison différée (Kafka) le
+// comportement de JetStream : il compte les livraisons de chaque message, et
+// attend le délai de backoff avant de le rendre au broker, qui le relivre
+// aussitôt. Le compte est tenu en mémoire : il repart de zéro au redémarrage.
+// Pendant l'attente, la partition est bloquée : c'est le modèle de Kafka,
+// qui garde l'ordre.
+func emulateRedelivery(delay backoff) message.HandlerMiddleware {
+	var (
+		mu     sync.Mutex
+		counts = map[string]int{}
+	)
+	return func(h message.HandlerFunc) message.HandlerFunc {
+		return func(msg *message.Message) ([]*message.Message, error) {
+			mu.Lock()
+			counts[msg.UUID]++
+			n := counts[msg.UUID]
+			mu.Unlock()
+			msg.Metadata.Set(DeliveryCountKey, strconv.Itoa(n))
+			out, err := h(msg)
+			if err == nil { // traité, ou parti en DLQ
+				mu.Lock()
+				delete(counts, msg.UUID)
+				mu.Unlock()
+				return out, nil
+			}
+			select {
+			case <-time.After(delay.WaitTime(uint64(n))):
+			case <-msg.Context().Done():
+			}
+			return out, err
+		}
+	}
+}
+
+// deliveryCountUnmarshaler ajoute aux métadonnées le numéro de livraison que
+// JetStream fournit, et que le décodeur par défaut ne transmet pas.
 type deliveryCountUnmarshaler struct{ wmjs.DefaultUnmarshaler }
 
 func (u deliveryCountUnmarshaler) Unmarshal(m jetstream.Msg) (*message.Message, error) {

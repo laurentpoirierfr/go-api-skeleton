@@ -13,7 +13,7 @@ sequenceDiagram
     participant Dom as domain/order
     participant DB as PostgreSQL
     participant Fwd as forwarder<br/>(dans api)
-    participant JS as NATS JetStream<br/>stream ORDERS
+    participant JS as broker<br/>NATS JetStream ou Redpanda
     participant W as worker
 
     Client->>API: POST /v1/orders
@@ -44,10 +44,11 @@ sequenceDiagram
     W-->>JS: Ack
 ```
 
-**Si NATS est indisponible** : les étapes 1 à 10 fonctionnent normalement, le
+**Si le broker est indisponible** : les étapes 1 à 10 fonctionnent normalement, le
 client reçoit 201 ; l'événement attend dans `watermill_outbox`, et le
-forwarder le publie au retour de NATS. `/health/ready` signale la coupure.
+forwarder le publie au retour du broker. `/health/ready` signale la coupure.
 
 **Si l'API s'arrête entre la publication et l'effacement** : le message est
-publié une seconde fois au redémarrage ; JetStream l'élimine, car il connaît
-déjà son `Nats-Msg-Id` (fenêtre de déduplication de 2 minutes).
+publié une seconde fois au redémarrage. JetStream l'élimine, car il connaît
+déjà son `Nats-Msg-Id` (fenêtre de 2 minutes) ; avec Redpanda, le doublon
+arrive au worker, dont l'idempotence l'absorbe.

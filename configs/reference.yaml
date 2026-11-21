@@ -37,15 +37,26 @@ postgres:
 
 # Messagerie : publication et consommation des événements
 messaging:
-  # Broker utilisé : nats
+  # Broker utilisé : nats ou redpanda
   # env : MESSAGING_BROKER
   broker: "nats"
-  # NATS JetStream
+  # NATS JetStream (si broker = nats)
   nats:
     # URL du serveur (plusieurs : séparées par des virgules)
     # env : MESSAGING_NATS_URL
     # secret : jamais affiché en clair
     url: "nats://localhost:4222"
+  # Redpanda, ou tout broker Kafka (si broker = redpanda)
+  redpanda:
+    # Adresses Kafka des brokers (hôte:port)
+    # env : MESSAGING_REDPANDA_BROKERS
+    brokers: [localhost:19092]
+    # Partitions par topic créé : le parallélisme maximal d'un consommateur
+    # env : MESSAGING_REDPANDA_PARTITIONS
+    partitions: 3
+    # Copies de chaque partition : 1 en développement, 3 en production
+    # env : MESSAGING_REDPANDA_REPLICATION_FACTOR
+    replication_factor: 1
 
 # Consommation des événements (worker seulement)
 consumer:

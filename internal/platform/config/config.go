@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -59,12 +60,19 @@ type PostgresConfig struct {
 }
 
 type MessagingConfig struct {
-	Broker string     `mapstructure:"broker" default:"nats" doc:"Broker utilisé : nats"`
-	NATS   NATSConfig `mapstructure:"nats" doc:"NATS JetStream"`
+	Broker   string         `mapstructure:"broker" default:"nats" doc:"Broker utilisé : nats ou redpanda"`
+	NATS     NATSConfig     `mapstructure:"nats" doc:"NATS JetStream (si broker = nats)"`
+	Redpanda RedpandaConfig `mapstructure:"redpanda" doc:"Redpanda, ou tout broker Kafka (si broker = redpanda)"`
 }
 
 type NATSConfig struct {
 	URL string `mapstructure:"url" default:"nats://localhost:4222" secret:"true" doc:"URL du serveur (plusieurs : séparées par des virgules)"`
+}
+
+type RedpandaConfig struct {
+	Brokers           []string `mapstructure:"brokers" default:"localhost:19092" doc:"Adresses Kafka des brokers (hôte:port)"`
+	Partitions        int32    `mapstructure:"partitions" default:"3" doc:"Partitions par topic créé : le parallélisme maximal d'un consommateur"`
+	ReplicationFactor int16    `mapstructure:"replication_factor" default:"1" doc:"Copies de chaque partition : 1 en développement, 3 en production"`
 }
 
 type ConsumerConfig struct {
@@ -83,6 +91,12 @@ type LogConfig struct {
 type ShutdownConfig struct {
 	Timeout time.Duration `mapstructure:"timeout" default:"15s" doc:"Temps laissé aux traitements en cours, à l'arrêt"`
 }
+
+// Les valeurs propres à chaque binaire.
+var (
+	APIDefaults    = Config{Service: ServiceConfig{Name: "orders-api"}, HTTP: HTTPConfig{Address: ":8080"}}
+	WorkerDefaults = Config{Service: ServiceConfig{Name: "orders-worker"}, HTTP: HTTPConfig{Address: ":8081"}}
+)
 
 // Options dit où trouver la configuration.
 type Options struct {
@@ -160,8 +174,21 @@ func (c Config) validate() error {
 				errs = append(errs, fmt.Errorf("messaging.nats.url: %w", err))
 			}
 		}
+	case "redpanda":
+		if len(c.Messaging.Redpanda.Brokers) == 0 {
+			errs = append(errs, errors.New("messaging.redpanda.brokers: at least one broker"))
+		}
+		for _, b := range c.Messaging.Redpanda.Brokers {
+			if _, port, ok := strings.Cut(b, ":"); !ok || port == "" {
+				errs = append(errs, fmt.Errorf("messaging.redpanda.brokers: %q, expected host:port", b))
+			}
+		}
+		if c.Messaging.Redpanda.Partitions < 1 || c.Messaging.Redpanda.ReplicationFactor < 1 {
+			errs = append(errs, fmt.Errorf("messaging.redpanda: partitions %d and replication_factor %d must be at least 1",
+				c.Messaging.Redpanda.Partitions, c.Messaging.Redpanda.ReplicationFactor))
+		}
 	default:
-		errs = append(errs, fmt.Errorf("messaging.broker: %q, expected nats", c.Messaging.Broker))
+		errs = append(errs, fmt.Errorf("messaging.broker: %q, expected nats or redpanda", c.Messaging.Broker))
 	}
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(c.Log.Level)); err != nil {
@@ -395,4 +422,59 @@ func Explain(opts Options) (string, error) {
 		fmt.Fprintf(&b, "%s%s:\n", indent, key[strings.LastIndex(key, ".")+1:])
 	})
 	return b.String(), c.validate()
+}
+
+// EnvExample renvoie un fichier .env d'exemple : toutes les clés, avec leur
+// documentation et leur valeur effective pour ces options (en pratique, les
+// valeurs de développement du fichier YAML du binaire). Les sections exclues
+// (« consumer » pour l'api) sont omises. Le format KEY=value, sans guillemets,
+// convient au shell (set -a; . fichier), à VS Code (envFile) et à
+// docker run --env-file.
+func EnvExample(opts Options, title string, exclude ...string) (string, error) {
+	v, _, err := load(opts)
+	if err != nil {
+		return "", err
+	}
+	// Le chemin tel que l'utilisateur le tape, depuis la racine du projet.
+	base := filepath.Base(opts.File)
+	envFile := "configs/" + strings.TrimSuffix(base, filepath.Ext(base)) + ".env.example"
+	var b strings.Builder
+	fmt.Fprintf(&b, `# %s
+#
+# Généré à partir du code (internal/platform/config) : ne pas modifier à la
+# main, lancer « make config-reference ». Les valeurs sont celles du
+# développement local (make up) ; la documentation complète des clés est dans
+# configs/reference.yaml.
+#
+# Utilisation :
+#   set -a; . ./%s; set +a     (shell, avant go run)
+#   docker run --env-file %s …
+#   VS Code : "envFile" dans launch.json
+`, title, envFile, envFile)
+	section := ""
+	for _, f := range Fields() {
+		top, _, _ := strings.Cut(f.Key, ".")
+		if slicesContains(exclude, top) {
+			continue
+		}
+		if top != section {
+			section = top
+			fmt.Fprintf(&b, "\n# --- %s\n", top)
+		}
+		value := v.GetString(f.Key)
+		if f.kind.Kind() == reflect.Slice {
+			value = strings.Join(v.GetStringSlice(f.Key), ",")
+		}
+		fmt.Fprintf(&b, "\n# %s\n%s=%s\n", f.Doc, f.Env, value)
+	}
+	return b.String(), nil
+}
+
+func slicesContains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

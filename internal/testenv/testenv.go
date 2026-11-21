@@ -19,6 +19,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	tcredpanda "github.com/testcontainers/testcontainers-go/modules/redpanda"
 
 	"github.com/laurentpoirierfr/go-api-skeleton/internal/adapters/postgres"
 )
@@ -35,7 +36,15 @@ var (
 	natsOnce sync.Once
 	natsURL  string
 	natsErr  error
+
+	redpandaOnce   sync.Once
+	redpandaBroker string
+	redpandaErr    error
 )
+
+// RedpandaImage est l'image de Redpanda des tests (docker.io : le registre de
+// Redpanda limite les téléchargements anonymes).
+const RedpandaImage = "docker.io/redpandadata/redpanda:v25.2.4"
 
 // Main lance les tests du paquet, puis arrête les conteneurs démarrés.
 func Main(m *testing.M) {
@@ -121,4 +130,27 @@ func NATSURL(t *testing.T) string {
 		t.Fatalf("NATS container: %v", natsErr)
 	}
 	return natsURL
+}
+
+// RedpandaBroker renvoie l'adresse Kafka d'un serveur Redpanda, partagé : les
+// tests y créent leurs topics, et filtrent ce qu'ils lisent.
+func RedpandaBroker(t *testing.T) string {
+	t.Helper()
+	skipShort(t)
+	redpandaOnce.Do(func() {
+		ctx := context.Background()
+		c, err := tcredpanda.Run(ctx, RedpandaImage)
+		if c != nil {
+			register(c)
+		}
+		if err != nil {
+			redpandaErr = err
+			return
+		}
+		redpandaBroker, redpandaErr = c.KafkaSeedBroker(ctx)
+	})
+	if redpandaErr != nil {
+		t.Fatalf("Redpanda container: %v", redpandaErr)
+	}
+	return redpandaBroker
 }

@@ -3,7 +3,7 @@ GOLANGCI_IMAGE := docker.io/golangci/golangci-lint:v2.15.0
 # Podman sans root : keep-id garde l'identité de l'utilisateur dans le conteneur.
 CONTAINER_USER := $(if $(shell docker --version 2>/dev/null | grep -i podman),--userns=keep-id,--user $(shell id -u):$(shell id -g))
 
-.PHONY: help build test check lint vuln cover clean up down run-api run-worker images generate openapi diagrams config-reference
+.PHONY: up-apps help build test check lint vuln cover clean up down run-api run-worker images generate openapi diagrams config-reference
 
 ## help : liste les cibles
 help:
@@ -38,9 +38,9 @@ SQLC_IMAGE := docker.io/sqlc/sqlc:1.31.1
 generate:
 	docker run --rm --volume "$(CURDIR):/src" --workdir /src $(CONTAINER_USER) $(SQLC_IMAGE) generate
 
-## config-reference : régénère configs/reference.yaml à partir du code
+## config-reference : régénère configs/reference.yaml et les .env d'exemple à partir du code
 config-reference:
-	UPDATE_CONFIG_REFERENCE=1 go test -count=1 -run TestReferenceUpToDate ./internal/platform/config
+	UPDATE_CONFIG_REFERENCE=1 go test -count=1 -run 'TestReferenceUpToDate|TestEnvExamples' ./internal/platform/config
 
 ## openapi : régénère le contrat api/openapi.yaml à partir du code
 openapi:
@@ -56,13 +56,20 @@ diagrams:
 			-i "/data/$$(basename $$f)" -o "/tmp/$$(basename $$f)" -q || exit 1; \
 		done
 
-## up : démarre les dépendances (PostgreSQL, NATS, Jaeger) et attend qu'elles soient prêtes
-up:
-	docker compose up -d --wait
+# Le broker des événements : nats (par défaut) ou redpanda.
+BROKER ?= nats
 
-## down : arrête les dépendances et supprime leurs données
+## up : démarre PostgreSQL, Jaeger et le broker (BROKER=nats ou redpanda), et attend qu'ils soient prêts
+up:
+	BROKER=$(BROKER) docker compose --profile $(BROKER) up -d --wait
+
+## up-apps : comme up, plus l'api et le worker construits depuis le Dockerfile
+up-apps:
+	BROKER=$(BROKER) docker compose --profile $(BROKER) --profile apps up -d --build --wait
+
+## down : arrête tout (quel que soit le broker) et supprime les données
 down:
-	docker compose down -v
+	docker compose --profile nats --profile redpanda --profile apps down -v
 
 ## run-api : lance l'API (après make up)
 run-api:

@@ -53,7 +53,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	log := logger.New(out, cfg.Log.Format, cfg.Log.SlogLevel(), cfg.Service.Name, version.Version)
-	log.Info("configuration", "http", cfg.HTTP.Address, "postgres", cfg.Postgres.Redacted(), "nats", cfg.Messaging.NATS.URL)
+	log.Info("configuration", "http", cfg.HTTP.Address, "postgres", cfg.Postgres.Redacted(), "broker", cfg.Messaging.Broker)
 
 	if cfg.Postgres.AutoMigrate {
 		v, err := postgres.Migrate(cfg.Postgres.URL)
@@ -72,13 +72,13 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	uow := postgres.NewUnitOfWork(pool, nil)
 	notifications := app.NewNotificationService(uow, time.Now, func() string { return uuid.Must(uuid.NewV7()).String() })
 
-	conn, err := messaging.Connect(cfg.Messaging.NATS.URL, cfg.Service.Name)
+	wmLogger := watermill.NewSlogLogger(log.With("component", "watermill"))
+	broker, err := messaging.NewBroker(messaging.OptionsFrom(cfg), wmLogger)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	consumer, err := messaging.Consumer(conn, notifications, log,
-		watermill.NewSlogLogger(log.With("component", "watermill")),
+	defer broker.Close()
+	consumer, err := messaging.Consumer(broker, notifications, log, wmLogger,
 		messaging.ConsumerConfig{
 			Name:          app.NotificationConsumer,
 			MaxDeliveries: cfg.Consumer.MaxDeliveries,
@@ -93,7 +93,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 
 	h := health.New(2 * time.Second)
 	h.Add("postgres", pool.Ping)
-	h.Add("nats", messaging.Check(conn))
+	h.Add(broker.Name(), broker.Check)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	srv := &http.Server{
@@ -120,7 +120,7 @@ func configOptions(args []string) (config.Options, bool, error) {
 	opts := config.Options{
 		File:         *file,
 		FileRequired: *file != "",
-		Defaults:     config.Config{Service: config.ServiceConfig{Name: "orders-worker"}, HTTP: config.HTTPConfig{Address: ":8081"}},
+		Defaults:     config.WorkerDefaults,
 	}
 	if opts.File == "" {
 		opts.File = "configs/worker.yaml"

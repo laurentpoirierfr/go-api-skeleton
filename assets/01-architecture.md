@@ -24,7 +24,7 @@ flowchart LR
     subgraph sorties["Adaptateurs de sortie"]
         direction TB
         pg["postgres<br/>pgx · sqlc · migrations"]
-        msg["messaging<br/>outbox · forwarder · JetStream"]
+        msg["messaging<br/>outbox · forwarder<br/>NATS JetStream ou Redpanda"]
         mem["memory<br/>tests sans base"]
     end
 

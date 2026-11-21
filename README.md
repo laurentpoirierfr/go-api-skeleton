@@ -38,6 +38,43 @@ Les fichiers de `configs/` ne contiennent que ce qui diffère des valeurs par
 défaut en développement. Une configuration invalide arrête le binaire au
 démarrage, avec la liste complète des erreurs.
 
+## Messagerie : NATS ou Redpanda
+
+Le broker se choisit par la configuration (`messaging.broker`, ou
+`MESSAGING_BROKER`) : `nats` (NATS JetStream, par défaut) ou `redpanda` (ou
+tout broker Kafka). Le domaine, l'outbox, le format des messages et
+l'idempotence du worker sont communs ; seul l'adaptateur change.
+
+```bash
+make up                          # PostgreSQL, Jaeger et NATS
+make up BROKER=redpanda          # PostgreSQL, Jaeger et Redpanda (console : http://localhost:8082)
+MESSAGING_BROKER=redpanda make run-api
+```
+
+Les deux brokers n'offrent pas les mêmes garanties :
+
+| | NATS JetStream | Redpanda (Kafka) |
+|-|----------------|------------------|
+| Doublons à la publication | éliminés par le broker (`Nats-Msg-Id`) | possibles : l'idempotence du worker les absorbe |
+| Relivraison après échec | différée par le broker, sans bloquer les autres messages | émulée par le worker : la partition attend le délai |
+| Nombre de livraisons | compté par le broker | compté par le worker (remis à zéro au redémarrage) |
+| Ordre | celui du stream | par commande (clé de partition = identifiant de commande) |
+| Topologie | streams `ORDERS` et `DLQ` | topics `orders.created`, `orders.cancelled`, `dlq.<consommateur>` |
+
+Les mêmes tests d'intégration tournent contre les deux brokers.
+
+## Fichiers .env d'exemple
+
+`configs/api.env.example` et `configs/worker.env.example` contiennent toutes
+les variables d'un binaire, documentées, avec les valeurs du développement
+local. Ils sont générés à partir du code (`make config-reference`), et suffisent
+seuls à démarrer :
+
+```bash
+set -a; . ./configs/api.env.example; set +a; go run ./cmd/api
+docker run --env-file configs/worker.env.example go-api-skeleton-worker:dev
+```
+
 ## Images Docker
 
 Un seul `Dockerfile` construit les deux binaires (`--build-arg APP=api|worker`),
@@ -47,7 +84,7 @@ en deux étapes : compilation dans `golang`, puis exécution dans
 ```bash
 make images                        # go-api-skeleton-api et -worker, version issue de git
 make images VERSION=1.2.0          # une version précise
-docker compose --profile apps up   # les dépendances et les deux applications
+make up-apps                       # les dépendances et les deux applications (BROKER=redpanda possible)
 ```
 
 L'image embarque `configs/<app>.yaml` ; chaque clé reste surchargeable par

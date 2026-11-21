@@ -13,7 +13,7 @@ flowchart LR
 
     subgraph deps["Dépendances (compose.yaml)"]
         pg[("PostgreSQL 17<br/>:5432")]
-        nats[["NATS 2.12 JetStream<br/>:4222, supervision :8222"]]
+        nats[["broker, au choix :<br/>NATS 2.12 JetStream :4222<br/>ou Redpanda :19092"]]
         jaeger["Jaeger<br/>OTLP :4317/:4318<br/>UI :16686"]
     end
 
@@ -28,8 +28,9 @@ flowchart LR
 | Commande | Effet |
 |----------|-------|
 | `make up` | démarre PostgreSQL, NATS et Jaeger, et attend qu'ils soient prêts |
+| `make up BROKER=redpanda` | la même chose avec Redpanda (et sa console sur :8082) |
 | `make run-api`, `make run-worker` | lance un binaire avec `configs/<binaire>.yaml` |
-| `docker compose --profile apps up` | lance aussi les deux applications, depuis le Dockerfile |
+| `make up-apps` | lance aussi les deux applications, depuis le Dockerfile |
 | `make images` | construit les deux images |
 
 **La configuration** : valeurs par défaut du code, puis `configs/<binaire>.yaml`,
@@ -38,4 +39,4 @@ puis variables d'environnement (`HTTP_ADDRESS` surcharge `http.address`).
 | Sonde | Répond 200 si… | Sinon |
 |-------|----------------|-------|
 | `/health/live` | le processus répond | l'orchestrateur le redémarre |
-| `/health/ready` | PostgreSQL et NATS répondent, et l'arrêt n'a pas commencé | 503 : retiré du trafic, sans redémarrage |
+| `/health/ready` | PostgreSQL et le broker répondent, et l'arrêt n'a pas commencé | 503 : retiré du trafic, sans redémarrage |
