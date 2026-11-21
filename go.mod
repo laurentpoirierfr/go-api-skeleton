@@ -5,6 +5,7 @@ go 1.27.4
 tool golang.org/x/vuln/cmd/govulncheck
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/spf13/viper v1.21.0
 	golang.org/x/sync v0.25.0
 )
